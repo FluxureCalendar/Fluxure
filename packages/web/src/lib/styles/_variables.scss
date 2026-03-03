@@ -1,0 +1,28 @@
+// Breakpoints
+$bp-small: 480px;
+$bp-mobile: 768px;
+$bp-tablet: 1024px;
+
+// Z-index scale
+$z-sidebar: 40;
+$z-dropdown: 50;
+$z-panel: 60;
+$z-tooltip: 70;
+$z-overlay: 100;
+$z-modal: 110;
+$z-progress: 200;
+$z-toast: 1000;
+
+// Font stacks
+$font-sans:
+  'Geist Sans',
+  -apple-system,
+  BlinkMacSystemFont,
+  'Segoe UI',
+  Roboto,
+  sans-serif;
+$font-mono: 'Geist Mono', ui-monospace, 'SF Mono', SFMono-Regular, monospace;
+
+// Sidebar dimensions (mirrors CSS custom properties)
+$sidebar-width: 240px;
+$sidebar-collapsed-width: 48px;

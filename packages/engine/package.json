@@ -1,0 +1,34 @@
+{
+  "name": "@fluxure/engine",
+  "version": "1.0.0",
+  "description": "Pure scheduling algorithm — greedy slot placement with quality scoring for Fluxure",
+  "license": "AGPL-3.0-only",
+  "author": {
+    "name": "Joey Manani",
+    "email": "contact@theflyingrat.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FluxureCalendar/Fluxure.git",
+    "directory": "packages/engine"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fluxure/shared": "workspace:*",
+    "sorted-btree": "^2.1.0"
+  }
+}

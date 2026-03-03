@@ -1,0 +1,48 @@
+{
+  "name": "@fluxure/shared",
+  "version": "1.0.0",
+  "description": "Shared types, enums, constants, and natural language parser for Fluxure",
+  "license": "AGPL-3.0-only",
+  "author": {
+    "name": "Joey Manani",
+    "email": "contact@theflyingrat.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FluxureCalendar/Fluxure.git",
+    "directory": "packages/shared"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./auth-types": {
+      "types": "./dist/auth-types.d.ts",
+      "import": "./dist/auth-types.js"
+    },
+    "./date-utils": {
+      "types": "./dist/date-utils.d.ts",
+      "import": "./dist/date-utils.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@date-fns/tz": "^1.4.1",
+    "date-fns": "^4.1.0"
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "name": "fluxure",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Open-source intelligent calendar scheduling — automatically places habits, tasks, meetings, and focus time on Google Calendar",
+  "author": {
+    "name": "Joey Manani",
+    "email": "contact@theflyingrat.com",
+    "url": "https://theflyingrat.com"
+  },
+  "license": "AGPL-3.0-only",
+  "homepage": "https://fluxure.app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FluxureCalendar/Fluxure.git"
+  },
+  "bugs": {
+    "url": "https://github.com/FluxureCalendar/Fluxure/issues"
+  },
+  "keywords": [
+    "calendar",
+    "scheduling",
+    "google-calendar",
+    "habits",
+    "tasks",
+    "focus-time",
+    "meetings",
+    "time-management",
+    "productivity",
+    "saas",
+    "self-hosted",
+    "pwa"
+  ],
+  "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "test:coverage": "pnpm -r run test -- --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky",
+    "sync-env": "node scripts/sync-env.js",
+    "api:dev": "pnpm --filter @fluxure/api dev",
+    "api:build": "pnpm --filter @fluxure/api build",
+    "api:start": "pnpm --filter @fluxure/api start",
+    "api:test": "pnpm --filter @fluxure/api test",
+    "api:test:watch": "pnpm --filter @fluxure/api test:watch",
+    "api:test:smtp": "pnpm --filter @fluxure/api test:smtp",
+    "web:dev": "pnpm --filter @fluxure/web dev",
+    "web:build": "pnpm --filter @fluxure/web build",
+    "web:preview": "pnpm --filter @fluxure/web preview",
+    "web:check": "pnpm --filter @fluxure/web check",
+    "web:check:watch": "pnpm --filter @fluxure/web check:watch",
+    "shared:build": "pnpm --filter @fluxure/shared build",
+    "shared:dev": "pnpm --filter @fluxure/shared dev",
+    "shared:test": "pnpm --filter @fluxure/shared test",
+    "shared:test:watch": "pnpm --filter @fluxure/shared test:watch",
+    "engine:build": "pnpm --filter @fluxure/engine build",
+    "engine:dev": "pnpm --filter @fluxure/engine dev",
+    "engine:test": "pnpm --filter @fluxure/engine test",
+    "engine:test:watch": "pnpm --filter @fluxure/engine test:watch",
+    "landing:dev": "pnpm --filter @fluxure/landing dev",
+    "landing:build": "pnpm --filter @fluxure/landing build",
+    "landing:preview": "pnpm --filter @fluxure/landing preview"
+  },
+  "lint-staged": {
+    "*.{ts,js,svelte}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,css,scss,html,yaml,yml}": [
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vitest/coverage-v8": "^4.1.0",
+    "dotenv": "^17.3.1",
+    "eslint": "^10.0.3",
+    "eslint-plugin-svelte": "^3.15.2",
+    "globals": "^17.4.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "open": "^11.0.0",
+    "pg": "^8.20.0",
+    "prettier": "^3.8.1",
+    "prettier-plugin-svelte": "^3.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.57.0",
+    "vitest": "^4.1.0"
+  }
+}

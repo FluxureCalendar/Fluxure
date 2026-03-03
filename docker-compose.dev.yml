@@ -1,0 +1,28 @@
+# Development override — use with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+services:
+  fluxure:
+    build:
+      context: .
+      target: builder
+    volumes:
+      - ./packages:/app/packages
+      - ./pnpm-lock.yaml:/app/pnpm-lock.yaml
+    ports:
+      - '3000:3000'
+      - '9229:9229' # Node.js debugger
+    environment:
+      - NODE_ENV=development
+    # No resource limits in dev
+    deploy:
+      resources:
+        limits:
+          cpus: ''
+          memory: ''
+
+  postgres:
+    ports:
+      - '5432:5432'
+
+  redis:
+    ports:
+      - '6379:6379'

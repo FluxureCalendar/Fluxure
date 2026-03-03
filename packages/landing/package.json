@@ -1,0 +1,37 @@
+{
+  "name": "@fluxure/landing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Marketing landing page for Fluxure — static SvelteKit site with pricing, privacy, and terms",
+  "license": "AGPL-3.0-only",
+  "author": {
+    "name": "Joey Manani",
+    "email": "contact@theflyingrat.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FluxureCalendar/Fluxure.git",
+    "directory": "packages/landing"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite dev --port 5174",
+    "build": "vite build",
+    "preview": "vite preview --port 5174"
+  },
+  "devDependencies": {
+    "@fontsource/geist-mono": "^5.2.7",
+    "@fontsource/geist-sans": "^5.2.5",
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.55.0",
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "lucide-svelte": "^0.577.0",
+    "sass-embedded": "^1.98.0",
+    "svelte": "^5.53.12",
+    "vite": "^7.3.1",
+    "vite-plugin-compression2": "^2.5.2"
+  }
+}

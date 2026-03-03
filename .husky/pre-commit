@@ -1,0 +1,3 @@
+#!/bin/sh
+node scripts/bump-version.mjs
+npx lint-staged
