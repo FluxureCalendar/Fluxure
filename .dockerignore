@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+**/dist
+**/.svelte-kit
+**/build
+.git
+.env
+*.md
+!DEPLOY.md
