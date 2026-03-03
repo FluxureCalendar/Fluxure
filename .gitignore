@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+.svelte-kit/
+build/
+coverage/
+.DS_Store
+.claude/
+CLAUDE.md
+data/
+docs
