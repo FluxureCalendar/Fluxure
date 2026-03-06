@@ -1,10 +1,11 @@
-import { ItemType } from './types.js';
+import { ItemType, Priority, type DayOfWeek } from './types.js';
 
 export const BRAND = {
   name: 'Fluxure',
   tagline: 'Your calendar, intelligently managed',
   description:
     'Fluxure automatically schedules your habits, tasks, and focus time around your existing calendar. Open-source, self-hostable.',
+  landingUrl: 'https://fluxure.app',
 } as const;
 
 export const MS_PER_SECOND = 1000;
@@ -43,6 +44,7 @@ export const PUSH_FALLBACK_POLL_MS = 30 * MS_PER_MINUTE;
 export const WATCH_RENEWAL_BUFFER_MS = 12 * MS_PER_HOUR;
 
 export const SYNC_LOOKBACK_DAYS = 7;
+export const SYNC_LOOKBACK_MS = SYNC_LOOKBACK_DAYS * MS_PER_DAY;
 export const SYNC_LOOKAHEAD_DAYS = 30;
 export const NUKE_LOOKBACK_DAYS = 90;
 export const NUKE_LOOKAHEAD_DAYS = 365;
@@ -50,7 +52,6 @@ export const NUKE_LOOKAHEAD_DAYS = 365;
 export const GOOGLE_MAX_RETRIES = 3;
 export const GOOGLE_MAX_RETRY_DELAY_MS = 30_000;
 export const GOOGLE_MAX_DELETE_RETRIES = 3;
-export const GOOGLE_INTER_DELETE_DELAY_MS = 100;
 
 export const DEFAULT_WATCH_TTL_MS = 7 * MS_PER_DAY;
 export const MAX_EVENTS_CACHE = 10_000;
@@ -65,6 +66,7 @@ export const TYPE_ORDER: Record<ItemType, number> = {
   [ItemType.Habit]: 1,
   [ItemType.Task]: 2,
   [ItemType.Focus]: 3,
+  [ItemType.External]: 4,
 };
 
 // Thresholds for flipping events from Free to Busy status
@@ -89,8 +91,17 @@ export const MAX_SCHEDULING_WINDOW_DAYS = 90;
 export const CANDIDATE_STEP_MINUTES = 30;
 export const DEFAULT_FOCUS_BLOCK_MINUTES = 60;
 export const FOCUS_TIME_RISK_MULTIPLIER = 1.5;
-export const DEFAULT_WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri'] as const;
-export const DEFAULT_WEEKLY_DAY = ['mon'] as const;
+export const DEFAULT_ALL_DAYS: readonly DayOfWeek[] = [
+  'mon',
+  'tue',
+  'wed',
+  'thu',
+  'fri',
+  'sat',
+  'sun',
+];
+export const DEFAULT_WEEKDAYS: readonly DayOfWeek[] = ['mon', 'tue', 'wed', 'thu', 'fri'];
+export const DEFAULT_WEEKLY_DAY: readonly DayOfWeek[] = ['mon'];
 export const MONTH_WEEK_MIN = 1;
 export const MONTH_WEEK_MAX = 5;
 
@@ -195,8 +206,8 @@ export const SCHEDULE_CHANGES_RETENTION_DAYS_DEFAULT = 30;
 
 export const BOOKING_SLOT_STEP_MS = 15 * MS_PER_MINUTE;
 export const BOOKING_MIN_LEAD_TIME_MS = 30 * MS_PER_MINUTE;
+/** Number of days ahead to show available booking slots for scheduling links */
 export const BOOKING_WINDOW_DAYS = 7;
-export const BOOKING_DATE_RANGE_DAYS = 14;
 export const DEFAULT_BOOKING_DURATIONS = [30] as const;
 export const MAX_TEMPLATES_PER_USER = 8;
 export const MAX_ANALYTICS_RANGE_DAYS = 365;
@@ -224,6 +235,41 @@ export const COLOR_NAMES: Record<string, string> = {
   '#e91e63': 'Pink',
 };
 
+// Priority: numeric value → lowercase label
+export const PRIORITY_LABELS: Record<number, string> = {
+  [Priority.Critical]: 'critical',
+  [Priority.High]: 'high',
+  [Priority.Medium]: 'medium',
+  [Priority.Low]: 'low',
+};
+
+// Priority: label/alias → numeric value (for filter parsing)
+export const PRIORITY_BY_LABEL: Record<string, number> = {
+  critical: Priority.Critical,
+  high: Priority.High,
+  medium: Priority.Medium,
+  low: Priority.Low,
+  crit: Priority.Critical,
+};
+
+// Color: lowercase name → hex (reverse of COLOR_NAMES)
+export const COLOR_BY_NAME: Record<string, string> = Object.fromEntries(
+  Object.entries(COLOR_NAMES).map(([hex, name]) => [name.toLowerCase(), hex]),
+);
+
+// Status filter: label → which field to check and what values to match
+export const STATUS_FILTER_MAP: Record<
+  string,
+  { field: 'status' | 'enabled'; value: string[] | boolean }
+> = {
+  open: { field: 'status', value: ['open'] },
+  done: { field: 'status', value: ['completed'] },
+  completed: { field: 'status', value: ['completed'] },
+  scheduling: { field: 'status', value: ['done_scheduling'] },
+  enabled: { field: 'enabled', value: true },
+  disabled: { field: 'enabled', value: false },
+};
+
 export const TIME_TICK_INTERVAL_MS = 60_000;
 export const TOAST_DEFAULT_DURATION_MS = 3000;
 export const SEARCH_MIN_QUERY_LENGTH = 2;
@@ -238,27 +284,16 @@ export const MIN_EVENT_DURATION_HOURS = 0.25;
 export const MAX_VISIBLE_ATTENDEES = 3;
 
 export const DEFAULT_TIMEZONE = 'America/New_York';
-export const DEFAULT_PAST_EVENT_RETENTION_DAYS = 3;
-export const DEFAULT_TRAVEL_TIME_MINUTES = 15;
-export const DEFAULT_DECOMPRESSION_MINUTES = 5;
 export const DEFAULT_BREAK_BETWEEN_MINUTES = 10;
+export const PAST_EVENT_RETENTION_DAYS = 3;
 export const DEFAULT_TASK_DURATION = 60;
 export const DEFAULT_CHUNK_MIN = 15;
-export const DEFAULT_CHUNK_MAX = 60;
+export const DEFAULT_CHUNK_MAX = 120;
 export const DEFAULT_MEETING_DURATION = 30;
 export const DEFAULT_HABIT_DURATION_MIN = 5;
 export const DEFAULT_HABIT_DURATION_MAX = 480;
 export const SCHEDULING_WINDOW_MIN_DAYS = 1;
 export const SCHEDULING_WINDOW_MAX_DAYS = 90;
-export const PAST_EVENT_RETENTION_MIN_DAYS = 1;
-export const PAST_EVENT_RETENTION_MAX_DAYS = 30;
-
-export const DEFAULT_BUFFER_CONFIG = {
-  travelTimeMinutes: DEFAULT_TRAVEL_TIME_MINUTES,
-  decompressionMinutes: DEFAULT_DECOMPRESSION_MINUTES,
-  breakBetweenItemsMinutes: DEFAULT_BREAK_BETWEEN_MINUTES,
-} as const;
-
 export const PASSWORD_MIN_LENGTH = 8;
 export const PASSWORD_STRONG_LENGTH = 12;
 export const BOOKING_NAME_MAX_LENGTH = 200;

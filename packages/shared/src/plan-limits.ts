@@ -5,7 +5,8 @@ export interface PlanLimits {
   readonly maxHabits: number;
   readonly maxTasks: number;
   readonly maxMeetings: number;
-  readonly maxFocusRules: number;
+  readonly meetingsEnabled: boolean;
+  readonly focusTimeEnabled: boolean;
   readonly maxCalendars: number;
   readonly maxSchedulingLinks: number;
   readonly maxTemplates: number;
@@ -27,7 +28,8 @@ export const PLAN_LIMITS: Record<PlanType, PlanLimits> = {
     maxHabits: 3,
     maxTasks: 5,
     maxMeetings: 2,
-    maxFocusRules: 1,
+    meetingsEnabled: false,
+    focusTimeEnabled: false,
     maxCalendars: 1,
     maxSchedulingLinks: 1,
     maxTemplates: 2,
@@ -46,7 +48,8 @@ export const PLAN_LIMITS: Record<PlanType, PlanLimits> = {
     maxHabits: -1,
     maxTasks: -1,
     maxMeetings: -1,
-    maxFocusRules: -1,
+    meetingsEnabled: false,
+    focusTimeEnabled: true,
     maxCalendars: -1,
     maxSchedulingLinks: -1,
     maxTemplates: 8,
@@ -67,7 +70,7 @@ export function isUnlimited(limit: number): boolean {
   return limit === -1;
 }
 
-export function getPlanLimits(plan: string): PlanLimits {
+export function getPlanLimits(plan: PlanType | (string & {})): PlanLimits {
   if (plan in PLAN_LIMITS) {
     return PLAN_LIMITS[plan as PlanType];
   }

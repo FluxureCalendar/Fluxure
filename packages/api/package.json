@@ -1,6 +1,6 @@
 {
   "name": "@fluxure/api",
-  "version": "1.0.0",
+  "version": "1.0.15",
   "description": "Express REST API with PostgreSQL, JWT auth, Google Calendar sync, and real-time WebSocket for Fluxure",
   "license": "AGPL-3.0-only",
   "author": {
@@ -19,8 +19,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "dev": "tsx watch --import ./src/env.ts src/index.ts",
+    "start": "node --import ./dist/env.js dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:smtp": "tsx scripts/test-smtp.ts"

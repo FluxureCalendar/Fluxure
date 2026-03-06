@@ -1,6 +1,6 @@
 {
   "name": "@fluxure/landing",
-  "version": "1.0.0",
+  "version": "1.0.15",
   "private": true,
   "description": "Marketing landing page for Fluxure — static SvelteKit site with pricing, privacy, and terms",
   "license": "AGPL-3.0-only",
@@ -22,7 +22,12 @@
     "build": "vite build",
     "preview": "vite preview --port 5174"
   },
+  "dependencies": {
+    "@fluxure/shared": "workspace:*"
+  },
   "devDependencies": {
+    "@fontsource-variable/fraunces": "^5.2.9",
+    "@fontsource-variable/inter": "^5.2.8",
     "@fontsource/geist-mono": "^5.2.7",
     "@fontsource/geist-sans": "^5.2.5",
     "@sveltejs/adapter-static": "^3.0.10",

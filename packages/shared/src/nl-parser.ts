@@ -1,6 +1,7 @@
 import { addDays, set, TZDate } from './date-utils.js';
+import type { DayOfWeek } from './types.js';
 
-export type DayOfWeek = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+export type { DayOfWeek } from './types.js';
 
 export interface ParsedHabit {
   type: 'habit';
@@ -57,6 +58,32 @@ const DAY_ABBREVS: Record<string, DayOfWeek> = {
 };
 
 const DAY_ORDER: DayOfWeek[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+const MONTHS: Record<string, number> = {
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11,
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
+};
 
 /**
  * Parse a time string like "7am", "2pm", "14:00", "2:30pm" into "HH:MM" format.
@@ -175,6 +202,7 @@ function nextDayOfWeek(dayName: DayOfWeek, referenceDate?: Date, timezone?: stri
   const currentJsDay = timezone ? new TZDate(ref, timezone).getDay() : ref.getDay();
   let daysAhead = targetJsDay - currentJsDay;
   if (daysAhead < 0) daysAhead += 7;
+  if (daysAhead === 0) daysAhead = 7;
   const target = set(addDays(ref, daysAhead), {
     hours: 23,
     minutes: 59,
@@ -193,64 +221,45 @@ function parseDateExpr(
   tokens: string[],
   startIdx: number,
   referenceDate?: Date,
+  timezone?: string,
 ): { date: string; consumed: number } | null {
   if (startIdx >= tokens.length) return null;
   const token = tokens[startIdx].toLowerCase();
 
   // ISO date
   if (/^\d{4}-\d{2}-\d{2}$/.test(token)) {
-    const d = new Date(token + 'T23:59:00Z');
-    if (!isNaN(d.getTime())) return { date: d.toISOString(), consumed: 1 };
+    if (timezone) {
+      const d = new TZDate(token + 'T23:59:00', timezone);
+      if (!isNaN(d.getTime())) return { date: d.toISOString(), consumed: 1 };
+    } else {
+      const d = new Date(token + 'T23:59:00Z');
+      if (!isNaN(d.getTime())) return { date: d.toISOString(), consumed: 1 };
+    }
   }
 
   // Day name (full name, e.g. "friday" — 6+ chars)
   if (token.length >= 6 && DAY_ABBREVS[token]) {
-    return { date: nextDayOfWeek(DAY_ABBREVS[token], referenceDate), consumed: 1 };
+    return { date: nextDayOfWeek(DAY_ABBREVS[token], referenceDate, timezone), consumed: 1 };
   }
   // Short day name
   const shortDay = DAY_ABBREVS[token];
   if (shortDay && token.length >= 3) {
-    return { date: nextDayOfWeek(shortDay, referenceDate), consumed: 1 };
+    return { date: nextDayOfWeek(shortDay, referenceDate, timezone), consumed: 1 };
   }
 
   // Month + day: "March 15" or "march 15"
-  const months: Record<string, number> = {
-    january: 0,
-    february: 1,
-    march: 2,
-    april: 3,
-    may: 4,
-    june: 5,
-    july: 6,
-    august: 7,
-    september: 8,
-    october: 9,
-    november: 10,
-    december: 11,
-    jan: 0,
-    feb: 1,
-    mar: 2,
-    apr: 3,
-    jun: 5,
-    jul: 6,
-    aug: 7,
-    sep: 8,
-    oct: 9,
-    nov: 10,
-    dec: 11,
-  };
   // 'may' is both full name and abbreviation — no separate 3-letter entry needed
-  if (months[token] !== undefined && startIdx + 1 < tokens.length) {
+  if (MONTHS[token] !== undefined && startIdx + 1 < tokens.length) {
     const dayNum = parseInt(tokens[startIdx + 1]);
     if (dayNum >= 1 && dayNum <= 31) {
       const ref = referenceDate ?? new Date();
       const year = ref.getFullYear();
-      let d = new Date(Date.UTC(year, months[token], dayNum, 23, 59, 0));
+      let d = new Date(Date.UTC(year, MONTHS[token], dayNum, 23, 59, 0));
       // Validate: if JS rolled over (e.g. Feb 31 → Mar 3), reject
       if (d.getUTCDate() !== dayNum) return null;
       // If date is in the past, use next year
       if (d < ref) {
-        d = new Date(Date.UTC(year + 1, months[token], dayNum, 23, 59, 0));
+        d = new Date(Date.UTC(year + 1, MONTHS[token], dayNum, 23, 59, 0));
         if (d.getUTCDate() !== dayNum) return null;
       }
       return { date: d.toISOString(), consumed: 2 };
@@ -276,7 +285,11 @@ interface ClassifiedTokens {
 /**
  * Classify tokens from a quick-add input into structured fields.
  */
-function classifyTokens(tokens: string[], referenceDate?: Date): ClassifiedTokens {
+function classifyTokens(
+  tokens: string[],
+  referenceDate?: Date,
+  timezone?: string,
+): ClassifiedTokens {
   let time: string | null = null;
   let duration: number | null = null;
   let days: DayOfWeek[] | null = null;
@@ -296,7 +309,7 @@ function classifyTokens(tokens: string[], referenceDate?: Date): ClassifiedToken
   }
 
   if (byIndex >= 0) {
-    const dateResult = parseDateExpr(tokens, byIndex + 1, referenceDate);
+    const dateResult = parseDateExpr(tokens, byIndex + 1, referenceDate, timezone);
     if (dateResult) {
       dueDate = dateResult.date;
       consumed.add(byIndex);
@@ -425,7 +438,11 @@ function determineItemType(classified: ClassifiedTokens): ParsedItem | null {
  *   Task:    "Finish report by Friday 3h"
  *   Meeting: "Call with Sarah weekly Thu 2pm 30m"
  */
-export function parseQuickAdd(input: string, referenceDate?: Date): ParsedItem | null {
+export function parseQuickAdd(
+  input: string,
+  referenceDate?: Date,
+  timezone?: string,
+): ParsedItem | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
   if (trimmed.length > 500) return null;
@@ -433,6 +450,6 @@ export function parseQuickAdd(input: string, referenceDate?: Date): ParsedItem |
   const tokens = trimmed.split(/\s+/);
   if (tokens.length === 0) return null;
 
-  const classified = classifyTokens(tokens, referenceDate);
+  const classified = classifyTokens(tokens, referenceDate, timezone);
   return determineItemType(classified);
 }
