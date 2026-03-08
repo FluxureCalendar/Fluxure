@@ -60,7 +60,12 @@ export function generateCandidateSlots(
       continue;
     }
 
-    // Slide a duration-sized window, snapped to the step grid
+    // Slide a duration-sized window, snapped to the step grid.
+    // Grid snapping to stepMs intervals is intentional: it keeps scoring deterministic
+    // (identical inputs always produce the same candidate set) and bounds the number of
+    // candidates to O(windowDuration / stepMs). The trade-off is that in tight windows
+    // where (windowEnd - windowStart - durationMs) < stepMs, a valid placement can be
+    // skipped because the single grid-aligned candidate overshoots the window boundary.
     let candidateStart = Math.ceil(windowStart / stepMs) * stepMs;
     while (candidateStart + durationMs <= windowEnd) {
       const candidateEnd = candidateStart + durationMs;
@@ -79,10 +84,9 @@ export function generateCandidateSlots(
       }
       // Check backwards for any slot whose end extends past candidateStart
       for (let i = lo - 1; i >= 0; i--) {
-        if (sortedOccupied[i].endMs > candidateStart) {
-          hasConflict = true;
-          break;
-        }
+        if (sortedOccupied[i].endMs <= candidateStart) break;
+        hasConflict = true;
+        break;
       }
 
       // Hard dependency constraint: candidate must start after the dependency ends.

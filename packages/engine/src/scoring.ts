@@ -90,7 +90,7 @@ function scoreIdealTimeProximity(
   precomputedIdealMinutes?: number,
 ): number {
   const idealMinutes = precomputedIdealMinutes ?? parseTimeToMinutes(item.idealTime);
-  if (idealMinutes < 0) return 0; // invalid idealTime, no proximity score
+  if (idealMinutes === null) return 0; // invalid idealTime, no proximity score
   const slotMinutes = minutesSinceMidnightInTz(slot.start, tz);
 
   const rawDiff = Math.abs(slotMinutes - idealMinutes);

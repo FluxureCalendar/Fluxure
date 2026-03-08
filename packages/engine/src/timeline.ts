@@ -20,7 +20,10 @@ export function getSchedulingWindow(
     case SchedulingHours.Personal:
       return userSettings.personalHours;
     case SchedulingHours.Custom:
-      // Custom defaults to personal hours since we don't have custom config here
+      // Custom falls through to personal hours because the custom window
+      // start/end is applied by the caller (e.g. habit.windowStart/windowEnd)
+      // before reaching this function. This function only resolves the base
+      // hours bracket; the per-entity custom range is handled upstream.
       return userSettings.personalHours;
     default:
       return userSettings.workingHours;

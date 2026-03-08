@@ -8,6 +8,7 @@ import {
   EventStatus,
 } from '@fluxure/shared';
 import { EXTENDED_PROPS } from '@fluxure/shared';
+import { ITEM_ID_SEPARATOR } from './scheduler.js';
 
 /**
  * Generate calendar operations by diffing placements against existing managed events.
@@ -29,8 +30,8 @@ export function generateCalendarOperations(
     const status = statuses.get(itemId) ?? EventStatus.Free;
     const existingEvent = existingManagedEvents.get(itemId);
 
-    // Extract original entity ID — "__" is the separator for date/chunk suffixes
-    const sepIdx = itemId.lastIndexOf('__');
+    // Extract original entity ID — ITEM_ID_SEPARATOR is the separator for date/chunk suffixes
+    const sepIdx = itemId.lastIndexOf(ITEM_ID_SEPARATOR);
     const originalItemId = sepIdx > 0 ? itemId.substring(0, sepIdx) : itemId;
     const title = item.name || `${item.type}: ${originalItemId}`;
 
@@ -84,7 +85,7 @@ export function generateCalendarOperations(
   // Delete events that are no longer placed
   for (const [itemId, event] of existingManagedEvents) {
     if (!processedExistingIds.has(itemId)) {
-      const delSepIdx = itemId.lastIndexOf('__');
+      const delSepIdx = itemId.lastIndexOf(ITEM_ID_SEPARATOR);
       const originalItemId = delSepIdx > 0 ? itemId.substring(0, delSepIdx) : itemId;
       operations.push({
         type: CalendarOpType.Delete,
