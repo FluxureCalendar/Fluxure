@@ -1,6 +1,6 @@
 {
   "name": "@fluxure/api",
-  "version": "1.0.33",
+  "version": "1.0.34",
   "description": "Express REST API with PostgreSQL, JWT auth, Google Calendar sync, and real-time WebSocket for Fluxure",
   "license": "AGPL-3.0-only",
   "author": {
