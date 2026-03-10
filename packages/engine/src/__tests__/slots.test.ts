@@ -1,21 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { generateCandidateSlots, slotsOverlap } from '../slots.js';
-import {
-  ScheduleItem,
-  TimeSlot,
-  BufferConfig,
-  ItemType,
-  Priority,
-  DecompressionTarget,
-} from '@fluxure/shared';
+import { ScheduleItem, TimeSlot, BufferConfig, ItemType, Priority } from '@fluxure/shared';
 
-const defaultBuffer: BufferConfig = {
-  id: 'buf-1',
-  travelTimeMinutes: 0,
-  decompressionMinutes: 0,
-  breakBetweenItemsMinutes: 0,
-  applyDecompressionTo: 'all' as DecompressionTarget,
-};
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const defaultBuffer: BufferConfig = { breakBetweenItemsMinutes: 0 };
 
 function makeItem(overrides: Partial<ScheduleItem> = {}): ScheduleItem {
   return {
@@ -35,67 +26,60 @@ function makeItem(overrides: Partial<ScheduleItem> = {}): ScheduleItem {
   };
 }
 
+function slot(startH: number, startM: number, endH: number, endM: number, day = 2): TimeSlot {
+  return {
+    start: new Date(2026, 2, day, startH, startM),
+    end: new Date(2026, 2, day, endH, endM),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// slotsOverlap
+// ---------------------------------------------------------------------------
+
 describe('slotsOverlap', () => {
-  it('should detect overlapping slots', () => {
-    const a: TimeSlot = {
-      start: new Date(2026, 2, 2, 9, 0),
-      end: new Date(2026, 2, 2, 10, 0),
-    };
-    const b: TimeSlot = {
-      start: new Date(2026, 2, 2, 9, 30),
-      end: new Date(2026, 2, 2, 10, 30),
-    };
-    expect(slotsOverlap(a, b)).toBe(true);
+  it('detects overlapping slots', () => {
+    expect(slotsOverlap(slot(9, 0, 10, 0), slot(9, 30, 10, 30))).toBe(true);
   });
 
-  it('should not detect adjacent slots as overlapping', () => {
-    const a: TimeSlot = {
-      start: new Date(2026, 2, 2, 9, 0),
-      end: new Date(2026, 2, 2, 10, 0),
-    };
-    const b: TimeSlot = {
-      start: new Date(2026, 2, 2, 10, 0),
-      end: new Date(2026, 2, 2, 11, 0),
-    };
-    expect(slotsOverlap(a, b)).toBe(false);
+  it('does not treat adjacent (touching) slots as overlapping', () => {
+    expect(slotsOverlap(slot(9, 0, 10, 0), slot(10, 0, 11, 0))).toBe(false);
   });
 
-  it('should not detect non-overlapping slots', () => {
-    const a: TimeSlot = {
-      start: new Date(2026, 2, 2, 9, 0),
-      end: new Date(2026, 2, 2, 10, 0),
-    };
-    const b: TimeSlot = {
-      start: new Date(2026, 2, 2, 11, 0),
-      end: new Date(2026, 2, 2, 12, 0),
-    };
-    expect(slotsOverlap(a, b)).toBe(false);
+  it('does not detect non-overlapping slots', () => {
+    expect(slotsOverlap(slot(9, 0, 10, 0), slot(11, 0, 12, 0))).toBe(false);
   });
 
-  it('should detect when one slot contains another', () => {
-    const a: TimeSlot = {
-      start: new Date(2026, 2, 2, 9, 0),
-      end: new Date(2026, 2, 2, 12, 0),
-    };
-    const b: TimeSlot = {
-      start: new Date(2026, 2, 2, 10, 0),
-      end: new Date(2026, 2, 2, 11, 0),
-    };
-    expect(slotsOverlap(a, b)).toBe(true);
-    expect(slotsOverlap(b, a)).toBe(true);
+  it('detects containment in both directions', () => {
+    const outer = slot(9, 0, 12, 0);
+    const inner = slot(10, 0, 11, 0);
+    expect(slotsOverlap(outer, inner)).toBe(true);
+    expect(slotsOverlap(inner, outer)).toBe(true);
+  });
+
+  it('detects identical slots as overlapping', () => {
+    const s = slot(9, 0, 10, 0);
+    expect(slotsOverlap(s, s)).toBe(true);
+  });
+
+  it('handles zero-duration slots (start === end) as non-overlapping', () => {
+    const zero: TimeSlot = { start: new Date(2026, 2, 2, 10, 0), end: new Date(2026, 2, 2, 10, 0) };
+    const normal = slot(9, 0, 11, 0);
+    // A zero-duration slot has start === end, so a.start < b.end && b.start < a.end
+    // 10:00 < 11:00 = true, 9:00 < 10:00 = true → overlaps (point inside range)
+    expect(slotsOverlap(zero, normal)).toBe(true);
   });
 });
 
-describe('generateCandidateSlots', () => {
-  it('should generate candidates for a 30-min item in an 8-hour window', () => {
-    const timeline: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 9, 0),
-        end: new Date(2026, 2, 2, 17, 0),
-      },
-    ];
+// ---------------------------------------------------------------------------
+// generateCandidateSlots — basic generation
+// ---------------------------------------------------------------------------
 
+describe('generateCandidateSlots', () => {
+  it('generates correct count for a 30-min item in an 8-hour window (15-min step)', () => {
+    const timeline = [slot(9, 0, 17, 0)];
     const item = makeItem({ duration: 30 });
+
     const candidates = generateCandidateSlots(
       item,
       timeline,
@@ -107,120 +91,46 @@ describe('generateCandidateSlots', () => {
       15,
     );
 
-    // 8 hours = 480 minutes, 30 min duration, 15 min step
-    // (480 - 30) / 15 + 1 = 31 candidates
-    expect(candidates.length).toBe(31);
-
-    // All candidates should be 30 minutes long
+    // 480 min window, 30 min duration, 15 min step → (480-30)/15 + 1 = 31
+    expect(candidates).toHaveLength(31);
     for (const c of candidates) {
-      const durationMs = c.end.getTime() - c.start.getTime();
-      expect(durationMs).toBe(30 * 60 * 1000);
+      expect(c.end.getTime() - c.start.getTime()).toBe(30 * 60_000);
     }
   });
 
-  it('should filter out candidates that overlap with occupied slots', () => {
-    const timeline: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 9, 0),
-        end: new Date(2026, 2, 2, 12, 0),
-      },
-    ];
-
-    const occupiedSlots: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 10, 0),
-        end: new Date(2026, 2, 2, 11, 0),
-      },
-    ];
-
+  it('generates candidates at default step (CANDIDATE_STEP_MINUTES = 30)', () => {
+    const timeline = [slot(9, 0, 12, 0)];
     const item = makeItem({ duration: 30 });
-    const candidates = generateCandidateSlots(item, timeline, occupiedSlots, defaultBuffer);
-
-    // No candidate should overlap with 10:00-11:00
-    for (const c of candidates) {
-      expect(slotsOverlap(c, occupiedSlots[0])).toBe(false);
-    }
-  });
-
-  it('should respect buffer between items', () => {
-    const timeline: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 9, 0),
-        end: new Date(2026, 2, 2, 12, 0),
-      },
-    ];
-
-    const occupiedSlots: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 10, 0),
-        end: new Date(2026, 2, 2, 10, 30),
-      },
-    ];
-
-    const bufferConfig: BufferConfig = {
-      ...defaultBuffer,
-      breakBetweenItemsMinutes: 15,
-    };
-
-    const item = makeItem({ duration: 30 });
-    const candidates = generateCandidateSlots(item, timeline, occupiedSlots, bufferConfig);
-
-    // No candidate should start or end within 15 minutes of the occupied slot
-    for (const c of candidates) {
-      // Candidate must end at or before 9:45 (10:00 - 15 min buffer)
-      // or start at or after 10:45 (10:30 + 15 min buffer)
-      const endsBeforeBuffer = c.end.getTime() <= new Date(2026, 2, 2, 9, 45).getTime();
-      const startsAfterBuffer = c.start.getTime() >= new Date(2026, 2, 2, 10, 45).getTime();
-      expect(endsBeforeBuffer || startsAfterBuffer).toBe(true);
-    }
-  });
-
-  it('should return empty array when no slots fit', () => {
-    const timeline: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 9, 0),
-        end: new Date(2026, 2, 2, 9, 15),
-      },
-    ];
-
-    const item = makeItem({ duration: 30 });
-    const candidates = generateCandidateSlots(item, timeline, [], defaultBuffer);
-
-    expect(candidates.length).toBe(0);
-  });
-
-  it('should only generate candidates within the item time window', () => {
-    const timeline: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 7, 0),
-        end: new Date(2026, 2, 2, 22, 0),
-      },
-    ];
-
-    const item = makeItem({
-      duration: 30,
-      timeWindow: {
-        start: new Date(2026, 2, 2, 10, 0),
-        end: new Date(2026, 2, 2, 12, 0),
-      },
-    });
 
     const candidates = generateCandidateSlots(item, timeline, [], defaultBuffer);
 
-    for (const c of candidates) {
-      expect(c.start.getTime()).toBeGreaterThanOrEqual(new Date(2026, 2, 2, 10, 0).getTime());
-      expect(c.end.getTime()).toBeLessThanOrEqual(new Date(2026, 2, 2, 12, 0).getTime());
-    }
+    // 180 min window, 30 min duration, 30 min step → (180-30)/30 + 1 = 6
+    expect(candidates).toHaveLength(6);
   });
 
-  it('should generate candidates with initial score of 0', () => {
-    const timeline: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 9, 0),
-        end: new Date(2026, 2, 2, 17, 0),
-      },
-    ];
+  it('returns empty when duration exceeds available window', () => {
+    const timeline = [slot(9, 0, 9, 15)];
+    const item = makeItem({ duration: 30 });
 
+    expect(generateCandidateSlots(item, timeline, [], defaultBuffer)).toHaveLength(0);
+  });
+
+  it('returns empty for zero-duration item', () => {
+    const timeline = [slot(9, 0, 17, 0)];
+    const item = makeItem({ duration: 0 });
+
+    expect(generateCandidateSlots(item, timeline, [], defaultBuffer)).toHaveLength(0);
+  });
+
+  it('returns empty for negative-duration item', () => {
+    const timeline = [slot(9, 0, 17, 0)];
+    const item = makeItem({ duration: -10 });
+
+    expect(generateCandidateSlots(item, timeline, [], defaultBuffer)).toHaveLength(0);
+  });
+
+  it('initializes all candidate scores to 0', () => {
+    const timeline = [slot(9, 0, 17, 0)];
     const item = makeItem({ duration: 60 });
     const candidates = generateCandidateSlots(item, timeline, [], defaultBuffer);
 
@@ -229,70 +139,146 @@ describe('generateCandidateSlots', () => {
     }
   });
 
-  it('should enforce hard dependency constraint (no candidates before dependency end)', () => {
-    const timeline: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 9, 0),
-        end: new Date(2026, 2, 2, 17, 0),
-      },
-    ];
+  // ---------------------------------------------------------------------------
+  // Time window constraints
+  // ---------------------------------------------------------------------------
 
-    // Dependency is placed at 10:00-11:00
-    const existingPlacements = new Map<string, TimeSlot>();
-    existingPlacements.set('dep-item', {
-      start: new Date(2026, 2, 2, 10, 0),
-      end: new Date(2026, 2, 2, 11, 0),
-    });
-
+  it('constrains candidates to the item time window (narrower than timeline)', () => {
+    const timeline = [slot(7, 0, 22, 0)];
     const item = makeItem({
       duration: 30,
-      dependsOn: 'dep-item',
+      timeWindow: { start: new Date(2026, 2, 2, 10, 0), end: new Date(2026, 2, 2, 12, 0) },
     });
 
+    const candidates = generateCandidateSlots(item, timeline, [], defaultBuffer);
+
+    for (const c of candidates) {
+      expect(c.start.getTime()).toBeGreaterThanOrEqual(new Date(2026, 2, 2, 10, 0).getTime());
+      expect(c.end.getTime()).toBeLessThanOrEqual(new Date(2026, 2, 2, 12, 0).getTime());
+    }
+    expect(candidates.length).toBeGreaterThan(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Multiple timeline segments
+  // ---------------------------------------------------------------------------
+
+  it('generates candidates across multiple timeline segments', () => {
+    const timeline = [slot(9, 0, 10, 0), slot(14, 0, 15, 0)];
+    const item = makeItem({
+      duration: 30,
+      timeWindow: { start: new Date(2026, 2, 2, 8, 0), end: new Date(2026, 2, 2, 16, 0) },
+    });
+
+    const candidates = generateCandidateSlots(item, timeline, [], defaultBuffer);
+
+    // Each 1-hour segment fits 2 candidates at 30-min step: (60-30)/30+1 = 2
+    expect(candidates).toHaveLength(4);
+
+    const morningSlots = candidates.filter((c) => c.start.getHours() < 12);
+    const afternoonSlots = candidates.filter((c) => c.start.getHours() >= 12);
+    expect(morningSlots).toHaveLength(2);
+    expect(afternoonSlots).toHaveLength(2);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Occupied slot filtering
+  // ---------------------------------------------------------------------------
+
+  it('filters out candidates that overlap occupied slots', () => {
+    const timeline = [slot(9, 0, 12, 0)];
+    const occupied = [slot(10, 0, 11, 0)];
+    const item = makeItem({ duration: 30 });
+
+    const candidates = generateCandidateSlots(item, timeline, occupied, defaultBuffer);
+
+    for (const c of candidates) {
+      expect(slotsOverlap(c, occupied[0])).toBe(false);
+    }
+  });
+
+  it('filters correctly with multiple occupied slots', () => {
+    const timeline = [slot(9, 0, 17, 0)];
+    const occupied = [slot(10, 0, 10, 30), slot(14, 0, 15, 0)];
+    const item = makeItem({ duration: 30 });
+
+    const candidates = generateCandidateSlots(item, timeline, occupied, defaultBuffer);
+
+    for (const c of candidates) {
+      for (const occ of occupied) {
+        expect(slotsOverlap(c, occ)).toBe(false);
+      }
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Buffer between items
+  // ---------------------------------------------------------------------------
+
+  it('respects buffer between items', () => {
+    const timeline = [slot(9, 0, 12, 0)];
+    const occupied = [slot(10, 0, 10, 30)];
+    const bufferConfig: BufferConfig = { breakBetweenItemsMinutes: 15 };
+    const item = makeItem({ duration: 30 });
+
+    const candidates = generateCandidateSlots(item, timeline, occupied, bufferConfig);
+
+    for (const c of candidates) {
+      const endsBeforeBuffer = c.end.getTime() <= new Date(2026, 2, 2, 9, 45).getTime();
+      const startsAfterBuffer = c.start.getTime() >= new Date(2026, 2, 2, 10, 45).getTime();
+      expect(endsBeforeBuffer || startsAfterBuffer).toBe(true);
+    }
+  });
+
+  it('skips buffer when item has skipBuffer: true', () => {
+    const timeline = [slot(9, 0, 12, 0)];
+    const occupied = [slot(10, 0, 10, 30)];
+    const bufferConfig: BufferConfig = { breakBetweenItemsMinutes: 15 };
+
+    const itemWithBuffer = makeItem({ duration: 30 });
+    const itemSkipBuffer = makeItem({ duration: 30, skipBuffer: true });
+
+    const withBuffer = generateCandidateSlots(itemWithBuffer, timeline, occupied, bufferConfig);
+    const skipped = generateCandidateSlots(itemSkipBuffer, timeline, occupied, bufferConfig);
+
+    // Skipping buffer should produce more candidates (less exclusion zone)
+    expect(skipped.length).toBeGreaterThan(withBuffer.length);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Dependency constraints
+  // ---------------------------------------------------------------------------
+
+  it('enforces hard dependency — no candidates before dependency end', () => {
+    const timeline = [slot(9, 0, 17, 0)];
+    const placements = new Map<string, TimeSlot>();
+    placements.set('dep-item', slot(10, 0, 11, 0));
+
+    const item = makeItem({ duration: 30, dependsOn: 'dep-item' });
     const candidates = generateCandidateSlots(
       item,
       timeline,
       [],
       defaultBuffer,
-      existingPlacements,
+      placements,
       'dep-item',
     );
 
-    // All candidates should start at or after 11:00
     for (const c of candidates) {
       expect(c.start.getTime()).toBeGreaterThanOrEqual(new Date(2026, 2, 2, 11, 0).getTime());
     }
-
-    // And there should be candidates available
     expect(candidates.length).toBeGreaterThan(0);
   });
 
-  it('should allow candidates after dependency end regardless of calendar day', () => {
-    const timeline: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 9, 0),
-        end: new Date(2026, 2, 2, 17, 0),
-      },
-      {
-        start: new Date(2026, 2, 3, 9, 0),
-        end: new Date(2026, 2, 3, 17, 0),
-      },
-    ];
-
-    // Dependency is placed on March 2 at 14:00-15:00
-    const existingPlacements = new Map<string, TimeSlot>();
-    existingPlacements.set('dep-item', {
-      start: new Date(2026, 2, 2, 14, 0),
-      end: new Date(2026, 2, 2, 15, 0),
-    });
+  it('allows candidates on a later day even if dependency is on a previous day', () => {
+    const timeline = [slot(9, 0, 17, 0, 2), slot(9, 0, 17, 0, 3)];
+    const placements = new Map<string, TimeSlot>();
+    placements.set('dep-item', slot(14, 0, 15, 0, 2));
 
     const item = makeItem({
       duration: 30,
-      timeWindow: {
-        start: new Date(2026, 2, 3, 9, 0),
-        end: new Date(2026, 2, 3, 17, 0),
-      },
       dependsOn: 'dep-item',
+      timeWindow: { start: new Date(2026, 2, 3, 9, 0), end: new Date(2026, 2, 3, 17, 0) },
     });
 
     const candidates = generateCandidateSlots(
@@ -300,45 +286,59 @@ describe('generateCandidateSlots', () => {
       timeline,
       [],
       defaultBuffer,
-      existingPlacements,
+      placements,
       'dep-item',
     );
 
-    // Should have candidates on March 3 (different day, no restriction)
     expect(candidates.length).toBeGreaterThan(0);
     for (const c of candidates) {
-      expect(c.start.getDate()).toBe(3); // March 3
+      expect(c.start.getDate()).toBe(3);
     }
   });
 
-  it('should not filter candidates when dependency is not yet placed', () => {
-    const timeline: TimeSlot[] = [
-      {
-        start: new Date(2026, 2, 2, 9, 0),
-        end: new Date(2026, 2, 2, 17, 0),
-      },
-    ];
+  it('does not filter when dependency is not yet placed', () => {
+    const timeline = [slot(9, 0, 17, 0)];
+    const placements = new Map<string, TimeSlot>();
+    const item = makeItem({ duration: 30, dependsOn: 'dep-item' });
 
-    const existingPlacements = new Map<string, TimeSlot>();
-    // dep-item not in the map
-
-    const item = makeItem({
-      duration: 30,
-      dependsOn: 'dep-item',
-    });
-
-    const candidatesWithDep = generateCandidateSlots(
+    const withDep = generateCandidateSlots(
       item,
       timeline,
       [],
       defaultBuffer,
-      existingPlacements,
+      placements,
       'dep-item',
     );
+    const without = generateCandidateSlots(item, timeline, [], defaultBuffer);
 
-    const candidatesWithout = generateCandidateSlots(item, timeline, [], defaultBuffer);
+    expect(withDep.length).toBe(without.length);
+  });
 
-    // Both should have the same number of candidates
-    expect(candidatesWithDep.length).toBe(candidatesWithout.length);
+  // ---------------------------------------------------------------------------
+  // isSorted optimization parameter
+  // ---------------------------------------------------------------------------
+
+  it('produces identical results with isSorted=true when occupied are pre-sorted', () => {
+    const timeline = [slot(9, 0, 17, 0)];
+    const occupied = [slot(10, 0, 10, 30), slot(13, 0, 14, 0)]; // already sorted
+    const item = makeItem({ duration: 30 });
+
+    const normal = generateCandidateSlots(item, timeline, occupied, defaultBuffer);
+    const sorted = generateCandidateSlots(
+      item,
+      timeline,
+      occupied,
+      defaultBuffer,
+      undefined,
+      undefined,
+      undefined,
+      30,
+      true,
+    );
+
+    expect(sorted.length).toBe(normal.length);
+    for (let i = 0; i < normal.length; i++) {
+      expect(sorted[i].start.getTime()).toBe(normal[i].start.getTime());
+    }
   });
 });
