@@ -38,6 +38,26 @@ export {
 export { TZDate } from '@date-fns/tz';
 
 // ============================================================
+// Timezone validation
+// ============================================================
+
+/**
+ * Check whether a string is a valid IANA timezone identifier.
+ * Uses `Intl.DateTimeFormat` constructor validation — the same approach used by
+ * the Zod timezoneSchema in validation.ts. Handles edge cases like "UTC" which
+ * may not appear in `Intl.supportedValuesOf('timeZone')` on all runtimes.
+ */
+export function isValidTimezone(tz: string): boolean {
+  if (!tz) return false;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ============================================================
 // Pure string parsers (no date library needed)
 // ============================================================
 
@@ -56,11 +76,11 @@ export function parseTime(hhmm: string): { hours: number; minutes: number } | nu
 
 /**
  * Parse an "HH:MM" string into total minutes since midnight.
- * Returns -1 for invalid/empty input or out-of-range values.
+ * Returns null for invalid/empty input or out-of-range values.
  */
-export function parseTimeToMinutes(hhmm: string): number {
+export function parseTimeToMinutes(hhmm: string): number | null {
   const parsed = parseTime(hhmm);
-  if (!parsed) return -1;
+  if (!parsed) return null;
   return parsed.hours * 60 + parsed.minutes;
 }
 

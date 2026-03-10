@@ -10,6 +10,7 @@ export enum ItemType {
   Habit = 'habit',
   Task = 'task',
   Focus = 'focus',
+  External = 'external',
 }
 
 export enum EventStatus {
@@ -38,14 +39,58 @@ export enum SchedulingHours {
   Custom = 'custom',
 }
 
-export enum DecompressionTarget {
-  All = 'all',
-  VideoOnly = 'video_only',
-}
-
 export enum CalendarMode {
   Writable = 'writable',
   Locked = 'locked',
+}
+
+export type DayOfWeek = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+
+export type ConferenceType =
+  | 'zoom'
+  | 'google_meet'
+  | 'teams'
+  | 'webex'
+  | 'phone'
+  | 'in_person'
+  | 'other'
+  | 'none';
+
+/** Payload shape for GET /api/search/index — cached client-side for instant filtering */
+export interface SearchIndex {
+  habits: Array<{
+    id: string;
+    name: string;
+    priority: Priority;
+    color: string | null;
+    enabled: boolean;
+    days: DayOfWeek[];
+  }>;
+  tasks: Array<{
+    id: string;
+    name: string;
+    priority: Priority | null;
+    color: string | null;
+    status: TaskStatus | null;
+    dueDate: string | null;
+    enabled: boolean;
+  }>;
+  meetings: Array<{
+    id: string;
+    name: string;
+    priority: Priority | null;
+    color: string | null;
+    duration: number;
+    frequency: Frequency;
+    enabled: boolean;
+  }>;
+  events: Array<{
+    id: string;
+    title: string;
+    start: string;
+    end: string;
+    isAllDay: boolean;
+  }>;
 }
 
 export interface Habit {
@@ -57,8 +102,8 @@ export interface Habit {
   idealTime: string; // HH:MM
   durationMin: number; // minutes
   durationMax: number; // minutes
-  frequency: Frequency;
-  frequencyConfig: FrequencyConfig;
+  /** Which days of the week this habit runs — e.g. ["mon","wed","fri"] */
+  days: DayOfWeek[];
   schedulingHours: SchedulingHours;
   /** All occurrences are pinned — scheduler won't move this habit */
   forced: boolean;
@@ -75,7 +120,7 @@ export interface Habit {
 }
 
 export interface FrequencyConfig {
-  days?: string[]; // ["mon", "tue", ...]
+  days?: DayOfWeek[]; // ["mon", "tue", ...]
   weekInterval?: number; // every N weeks
   monthDay?: number; // day of month
   monthWeek?: number; // nth week of month (1-5)
@@ -89,7 +134,7 @@ export interface Task {
   totalDuration: number; // minutes
   remainingDuration: number; // minutes
   dueDate: string | null; // ISO datetime
-  earliestStart: string; // ISO datetime
+  earliestStart: string | null; // ISO datetime
   chunkMin: number; // minutes
   chunkMax: number; // minutes
   schedulingHours: SchedulingHours;
@@ -116,7 +161,7 @@ export interface SmartMeeting {
   windowStart: string | null; // HH:MM
   windowEnd: string | null; // HH:MM
   location: string;
-  conferenceType: string; // zoom | meet | teams | none
+  conferenceType: ConferenceType;
   skipBuffer: boolean;
   enabled: boolean;
   calendarId?: string;
@@ -130,19 +175,15 @@ export interface FocusTimeRule {
   weeklyTargetMinutes: number;
   dailyTargetMinutes: number;
   schedulingHours: SchedulingHours;
+  windowStart: string | null;
+  windowEnd: string | null;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface BufferConfig {
-  id: string;
-  /** Reserved — not yet used by the scheduling engine */
-  travelTimeMinutes: number;
-  /** Reserved — not yet used by the scheduling engine */
-  decompressionMinutes: number;
   breakBetweenItemsMinutes: number;
-  applyDecompressionTo: DecompressionTarget;
 }
 
 export interface SchedulingLink {
@@ -203,9 +244,13 @@ export interface CalendarEvent {
   itemType: ItemType | null;
   itemId: string | null; // FK to habit/task/meeting/focus
   status: EventStatus;
-  location?: string;
-  description?: string;
-  calendarId?: string; // which calendar this event belongs to
+  location: string | null;
+  description: string | null;
+  calendarId: string | null; // which calendar this event belongs to
+  /** ISO timestamp of when Fluxure last wrote this event to Google Calendar. */
+  lastModifiedByUs: string | null;
+  /** ISO timestamp from Google's `updated` field — set on every modification by any actor. */
+  googleUpdatedAt: string | null;
 }
 
 export interface TimeSlot {
@@ -263,10 +308,12 @@ export interface UserSettings {
   personalHours: { start: string; end: string };
   timezone: string;
   schedulingWindowDays: number; // how far ahead to schedule
-  defaultHabitCalendarId?: string;
-  defaultTaskCalendarId?: string;
+  defaultHabitCalendarId?: string | null;
+  defaultTaskCalendarId?: string | null;
   trimCompletedEvents?: boolean; // shrink events when marked complete early (default: true)
-  pastEventRetentionDays?: number; // how many days of past managed events to keep in DB (default: 3)
+  freeSlotOnComplete?: boolean; // allow scheduler to use completed event's time slot (default: false)
+  breakBetweenItemsMinutes?: number; // gap between scheduled items (default: 10)
+  autoCompleteHabits?: boolean; // auto-mark habits as done when scheduled time ends (default: true)
 }
 
 export interface UserConfig {
@@ -284,8 +331,8 @@ export interface CreateHabitRequest {
   idealTime: string;
   durationMin: number;
   durationMax: number;
-  frequency: Frequency;
-  frequencyConfig?: FrequencyConfig;
+  /** Which days of the week — e.g. ["mon","wed","fri"]. At least 1 required. */
+  days: DayOfWeek[];
   schedulingHours?: SchedulingHours;
   forced?: boolean;
   autoDecline?: boolean;
@@ -320,7 +367,7 @@ export interface CreateMeetingRequest {
   windowStart: string;
   windowEnd: string;
   location?: string;
-  conferenceType?: string;
+  conferenceType?: ConferenceType;
   skipBuffer?: boolean;
   calendarId?: string;
   color?: string;
@@ -372,6 +419,9 @@ export enum ScheduleChangeType {
   Moved = 'moved',
   Resized = 'resized',
   Deleted = 'deleted',
+  Completed = 'completed',
+  Locked = 'locked',
+  Unlocked = 'unlocked',
 }
 
 export interface ScheduleChange {

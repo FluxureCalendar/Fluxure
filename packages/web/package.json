@@ -1,6 +1,6 @@
 {
   "name": "@fluxure/web",
-  "version": "1.0.0",
+  "version": "1.0.17",
   "private": true,
   "description": "SvelteKit PWA frontend for Fluxure — dashboard, scheduling UI, onboarding, and public booking",
   "license": "AGPL-3.0-only",
@@ -29,19 +29,19 @@
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.55.0",
+    "@sveltejs/kit": "^2.56.1",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "lightningcss": "^1.32.0",
-    "sass-embedded": "^1.98.0",
-    "svelte": "^5.54.0",
-    "svelte-check": "^4.4.5",
+    "sass-embedded": "^1.99.0",
+    "svelte": "^5.55.1",
+    "svelte-check": "^4.4.6",
     "typescript": "^5.9.3",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/svelte": "^5.3.1",
     "jsdom": "^29.0.1",
-    "vite": "^8.0.1",
-    "vite-plugin-compression2": "^2.5.2",
-    "vitest": "^4.1.0"
+    "vite": "^8.0.4",
+    "vite-plugin-compression2": "^2.5.3",
+    "vitest": "^4.1.2"
   },
   "dependencies": {
     "@fluxure/shared": "workspace:*",

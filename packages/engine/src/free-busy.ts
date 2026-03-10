@@ -14,7 +14,6 @@ import { slotsOverlap } from './slots.js';
  * 5. Otherwise: return Free
  */
 export function computeFreeBusyStatus(
-  _itemId: string,
   currentPlacement: TimeSlot,
   allCandidateSlots: CandidateSlot[],
   now: Date,

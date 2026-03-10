@@ -1,4 +1,4 @@
-export { reschedule } from './scheduler.js';
+export { reschedule, ITEM_ID_SEPARATOR } from './scheduler.js';
 export { scoreSlot } from './scoring.js';
 export { generateCandidateSlots } from './slots.js';
 export { buildTimeline } from './timeline.js';

@@ -47,6 +47,9 @@ import {
   meetingsToScheduleItems,
   sortScheduleItems,
 } from './scheduler-items.js';
+
+/** Separator used to compose compound item IDs (e.g. "habitId__2026-03-02", "taskId__chunk0"). */
+export const ITEM_ID_SEPARATOR = '__';
 import {
   parseTimeToMinutes,
   startOfDayInTz,
@@ -92,16 +95,69 @@ class SortedSlots {
     });
     return result;
   }
+}
 
-  filter(predicate: (slot: TimeSlot) => boolean): TimeSlot[] {
-    const result: TimeSlot[] = [];
-    this.tree.forEach((slots) => {
-      for (const s of slots) {
-        if (predicate(s)) result.push(s);
-      }
-    });
-    return result;
+/**
+ * Binary-search insert a slot into a sorted array, maintaining sort order by start time.
+ * Mutates the array in place.
+ */
+function insertSorted(arr: TimeSlot[], slot: TimeSlot): void {
+  const startTime = slot.start.getTime();
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (arr[mid].start.getTime() < startTime) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
   }
+  if (lo === arr.length) {
+    arr.push(slot);
+  } else {
+    arr.splice(lo, 0, slot);
+  }
+}
+
+/**
+ * Insert a slot into a merged (non-overlapping) interval array, coalescing overlaps.
+ * Mutates the array in place.
+ */
+function insertMerged(merged: TimeSlot[], slot: TimeSlot): void {
+  const startTime = slot.start.getTime();
+  let lo = 0;
+  let hi = merged.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (merged[mid].start.getTime() < startTime) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const newSlot: TimeSlot = {
+    start: new Date(slot.start),
+    end: new Date(slot.end),
+  };
+
+  // Merge with preceding slot if it overlaps
+  let mergedWithPredecessor = false;
+  if (lo > 0 && merged[lo - 1].end.getTime() >= startTime) {
+    lo--;
+    newSlot.start = merged[lo].start;
+    newSlot.end = new Date(Math.max(merged[lo].end.getTime(), slot.end.getTime()));
+    mergedWithPredecessor = true;
+  }
+
+  // Absorb any subsequent slots that overlap with newSlot
+  let end = lo + (mergedWithPredecessor ? 1 : 0);
+  while (end < merged.length && merged[end].start.getTime() <= newSlot.end.getTime()) {
+    newSlot.end = new Date(Math.max(newSlot.end.getTime(), merged[end].end.getTime()));
+    end++;
+  }
+  merged.splice(lo, end - lo, newSlot);
 }
 
 interface CircularDependencyError {
@@ -166,6 +222,7 @@ function classifyCalendarEvents(
   calendarEvents: CalendarEvent[],
   habits: Habit[],
   currentTime: Date,
+  freeSlotOnComplete = false,
 ): ClassifiedEvents {
   const hardFixedEvents: TimeSlot[] = [];
   const softExternalEvents: TimeSlot[] = [];
@@ -187,16 +244,23 @@ function classifyCalendarEvents(
         softExternalEvents.push({ start: eventStart, end: eventEnd });
       }
     } else if (event.itemId) {
-      const baseId = event.itemId.split('__')[0];
+      const baseId = event.itemId.split(ITEM_ID_SEPARATOR)[0];
       const isPinned = entityForcedMap.get(baseId) || event.status === EventStatus.Locked;
       if (isPinned) {
+        hardFixedEvents.push({ start: eventStart, end: eventEnd });
+      } else if (event.status === EventStatus.Completed && !freeSlotOnComplete) {
+        // Completed events block time unless the user enabled freeSlotOnComplete
         hardFixedEvents.push({ start: eventStart, end: eventEnd });
       }
     }
 
-    if (event.isManaged && event.itemId && eventEnd > currentTime) {
+    if (
+      event.isManaged &&
+      event.itemId &&
+      (eventEnd > currentTime || event.status === EventStatus.Completed)
+    ) {
       existingManagedEvents.set(event.itemId, event);
-      const baseId = event.itemId.split('__')[0];
+      const baseId = event.itemId.split(ITEM_ID_SEPARATOR)[0];
       const isPinned = entityForcedMap.get(baseId) || event.status === EventStatus.Locked;
       if (isPinned) {
         lockedPlacements.set(event.itemId, { start: eventStart, end: eventEnd });
@@ -254,8 +318,8 @@ function scoreBestPlacement(
   tz: string,
   placementsByDay?: Map<string, TimeSlot[]>,
 ): { placement: TimeSlot; scored: CandidateSlot[] } {
-  const rawIdealMinutes = item.idealTime ? parseTimeToMinutes(item.idealTime) : -1;
-  const precomputedIdealMinutes = rawIdealMinutes >= 0 ? rawIdealMinutes : undefined;
+  const rawIdealMinutes = item.idealTime ? parseTimeToMinutes(item.idealTime) : null;
+  const precomputedIdealMinutes = rawIdealMinutes !== null ? rawIdealMinutes : undefined;
   const scored = candidates.map((candidate) => ({
     ...candidate,
     score: scoreSlot(
@@ -362,25 +426,7 @@ function placeFlexibleItems(
     placements.set(item.id, placement);
     occupiedSlots.insert(placement);
 
-    // Insert into cachedOccupied at the correct sorted position using binary search
-    {
-      const newStartTime = placement.start.getTime();
-      let lo = 0;
-      let hi = cachedOccupied.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >>> 1;
-        if (cachedOccupied[mid].start.getTime() < newStartTime) {
-          lo = mid + 1;
-        } else {
-          hi = mid;
-        }
-      }
-      if (lo === cachedOccupied.length) {
-        cachedOccupied.push(placement);
-      } else {
-        cachedOccupied.splice(lo, 0, placement);
-      }
-    }
+    insertSorted(cachedOccupied, placement);
 
     const pDayKey = toDateStr(placement.start, tz);
     const pDaySlots = placementsByDay.get(pDayKey);
@@ -452,6 +498,7 @@ export function reschedule(
   bufferConfig: BufferConfig,
   userSettings: UserSettings,
   now?: Date,
+  completedHabitDays?: Set<string>,
 ): ScheduleResult {
   const currentTime = now ?? new Date();
   const tz = userSettings.timezone || 'UTC';
@@ -471,7 +518,12 @@ export function reschedule(
 
   const days = enumerateDays(scheduleStart, scheduleEnd, tz);
   const timeline = buildTimeline(scheduleStart, scheduleEnd, userSettings);
-  const classified = classifyCalendarEvents(calendarEvents, habits, currentTime);
+  const classified = classifyCalendarEvents(
+    calendarEvents,
+    habits,
+    currentTime,
+    userSettings.freeSlotOnComplete ?? false,
+  );
 
   const habitItems = habitsToScheduleItems(
     habits,
@@ -480,6 +532,7 @@ export function reschedule(
     scheduleStart,
     tz,
     days,
+    completedHabitDays,
   );
   const taskItems = tasksToScheduleItems(tasks, scheduleStart, scheduleEnd, userSettings);
   const meetingItems = meetingsToScheduleItems(
@@ -498,7 +551,7 @@ export function reschedule(
   if (circularHabitIds.size > 0) {
     for (let i = 0; i < habitItems.length; i++) {
       const item = habitItems[i];
-      if (circularHabitIds.has(item.id.split('__')[0])) {
+      if (circularHabitIds.has(item.id.split(ITEM_ID_SEPARATOR)[0])) {
         habitItems[i] = { ...item, dependsOn: null };
       }
     }
@@ -563,10 +616,8 @@ export function reschedule(
       placements,
       candidateSlotsMap,
       itemMap,
-      unschedulable,
       bufferConfig,
       userSettings,
-      scheduleStart,
       scheduleEnd,
       currentTime,
       itemTypeMap,
@@ -580,10 +631,7 @@ export function reschedule(
     const item = itemMap.get(itemId);
     const candidates = candidateSlotsMap.get(itemId) ?? [];
     const isLocked = item?.forced || classified.lockedExistingIds.has(itemId);
-    statuses.set(
-      itemId,
-      computeFreeBusyStatus(itemId, placement, candidates, currentTime, isLocked),
-    );
+    statuses.set(itemId, computeFreeBusyStatus(placement, candidates, currentTime, isLocked));
   }
 
   const operations = generateCalendarOperations(
@@ -604,11 +652,12 @@ function computeWeeklyFocusMetrics(
   itemTypeMap: Map<string, ItemType>,
   weekStart: Date,
   weekEnd: Date,
+  now: Date,
 ): { placedMinutes: number; availableMinutes: number } {
   let placedMinutes = 0;
   for (const [id, slot] of placements) {
     if (slot.end > weekStart && slot.start < weekEnd) {
-      if (itemTypeMap.get(id) !== ItemType.Meeting) {
+      if (itemTypeMap.get(id) === ItemType.Focus) {
         const overlapMs = Math.max(
           0,
           Math.min(slot.end.getTime(), weekEnd.getTime()) -
@@ -619,20 +668,25 @@ function computeWeeklyFocusMetrics(
     }
   }
 
+  // Clamp week start to now for available minutes — past days can't be scheduled
+  const clampedWeekStart = weekStart.getTime() < now.getTime() ? now : weekStart;
+
   // Two-pointer sweep: both timeline and mergedOccupied are sorted by start time
   let availableMinutes = 0;
   let j = 0;
   for (const slot of timeline) {
-    if (slot.start < weekStart || slot.start >= weekEnd) continue;
-    let availableMs = slot.end.getTime() - slot.start.getTime();
-    // Advance past occupied slots that end before this timeline slot starts
-    while (j < mergedOccupied.length && mergedOccupied[j].end.getTime() <= slot.start.getTime()) {
+    if (slot.end <= clampedWeekStart || slot.start >= weekEnd) continue;
+    const clippedStart = slot.start < clampedWeekStart ? clampedWeekStart : slot.start;
+    const clippedEnd = slot.end > weekEnd ? weekEnd : slot.end;
+    let availableMs = clippedEnd.getTime() - clippedStart.getTime();
+    // Advance past occupied slots that end before the clipped slot starts
+    while (j < mergedOccupied.length && mergedOccupied[j].end.getTime() <= clippedStart.getTime()) {
       j++;
     }
     let k = j;
-    while (k < mergedOccupied.length && mergedOccupied[k].start.getTime() < slot.end.getTime()) {
-      const overlapStart = Math.max(slot.start.getTime(), mergedOccupied[k].start.getTime());
-      const overlapEnd = Math.min(slot.end.getTime(), mergedOccupied[k].end.getTime());
+    while (k < mergedOccupied.length && mergedOccupied[k].start.getTime() < clippedEnd.getTime()) {
+      const overlapStart = Math.max(clippedStart.getTime(), mergedOccupied[k].start.getTime());
+      const overlapEnd = Math.min(clippedEnd.getTime(), mergedOccupied[k].end.getTime());
       if (overlapEnd > overlapStart) {
         availableMs -= overlapEnd - overlapStart;
       }
@@ -651,10 +705,8 @@ function placeFocusTime(
   placements: Map<string, TimeSlot>,
   candidateSlotsMap: Map<string, CandidateSlot[]>,
   itemMap: Map<string, ScheduleItem>,
-  _unschedulable: Array<{ itemId: string; itemType: ItemType; reason: string }>,
   bufferConfig: BufferConfig,
   userSettings: UserSettings,
-  _scheduleStart: Date,
   scheduleEnd: Date,
   now: Date,
   itemTypeMap: Map<string, ItemType> = new Map(),
@@ -694,6 +746,7 @@ function placeFocusTime(
       itemTypeMap,
       weekStart,
       weekEnd,
+      now,
     );
 
     const targetRemaining = rule.weeklyTargetMinutes - placedMinutes;
@@ -738,7 +791,7 @@ function placeFocusTime(
         timeline,
         cachedFocusOccupied,
         bufferConfig,
-        undefined,
+        placements,
         undefined,
         tz,
         CANDIDATE_STEP_MINUTES,
@@ -759,61 +812,8 @@ function placeFocusTime(
       placements.set(focusItem.id, placement);
       occupiedSlots.insert(placement);
 
-      // Binary-search insert into cachedFocusOccupied and merge into mergedOccupied
-      {
-        const newStartTime = placement.start.getTime();
-
-        let lo = 0;
-        let hi = cachedFocusOccupied.length;
-        while (lo < hi) {
-          const mid = (lo + hi) >>> 1;
-          if (cachedFocusOccupied[mid].start.getTime() < newStartTime) {
-            lo = mid + 1;
-          } else {
-            hi = mid;
-          }
-        }
-        if (lo === cachedFocusOccupied.length) {
-          cachedFocusOccupied.push(placement);
-        } else {
-          cachedFocusOccupied.splice(lo, 0, placement);
-        }
-
-        const newSlot: TimeSlot = {
-          start: new Date(placement.start),
-          end: new Date(placement.end),
-        };
-        let mlo = 0;
-        let mhi = mergedOccupied.length;
-        while (mlo < mhi) {
-          const mid = (mlo + mhi) >>> 1;
-          if (mergedOccupied[mid].start.getTime() < newStartTime) {
-            mlo = mid + 1;
-          } else {
-            mhi = mid;
-          }
-        }
-        // Merge with preceding slot if it overlaps
-        if (mlo > 0 && mergedOccupied[mlo - 1].end.getTime() >= newStartTime) {
-          mlo--;
-          newSlot.start = mergedOccupied[mlo].start;
-          newSlot.end = new Date(
-            Math.max(mergedOccupied[mlo].end.getTime(), placement.end.getTime()),
-          );
-        }
-        // Absorb any subsequent slots that overlap with newSlot
-        let mend = mlo + (newSlot.start === mergedOccupied[mlo]?.start ? 1 : 0);
-        while (
-          mend < mergedOccupied.length &&
-          mergedOccupied[mend].start.getTime() <= newSlot.end.getTime()
-        ) {
-          newSlot.end = new Date(
-            Math.max(newSlot.end.getTime(), mergedOccupied[mend].end.getTime()),
-          );
-          mend++;
-        }
-        mergedOccupied.splice(mlo, mend - mlo, newSlot);
-      }
+      insertSorted(cachedFocusOccupied, placement);
+      insertMerged(mergedOccupied, placement);
 
       if (placementsByDay) {
         const pDayKey = toDateStr(placement.start, tz);

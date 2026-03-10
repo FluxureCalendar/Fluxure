@@ -122,7 +122,7 @@ function scoreIdealTime(
   for (const item of placedItems) {
     const slot = placements.get(item.id)!;
     const idealMin = parseTimeToMinutes(item.idealTime);
-    if (idealMin < 0) continue;
+    if (idealMin === null) continue;
     const slotMin = minutesSinceMidnightInTz(slot.start, tz);
     const rawDiff = Math.abs(slotMin - idealMin);
     const diff = Math.min(rawDiff, MINUTES_PER_DAY - rawDiff);
@@ -149,20 +149,30 @@ function scoreIdealTime(
 }
 
 /**
- * Divides the weekly focus target by schedulableDays (e.g. 5 for working hours)
- * to derive a daily target when only a weekly total is configured.
+ * Scores focus time placement against daily/weekly targets.
+ * When only a weekly total is configured, divides by 5 working days
+ * to derive a daily target.
  */
 function scoreFocusTime(
   focusRules: FocusTimeRule[],
   focusMinutesPlaced: number,
   breakdown: string[],
-  schedulableDays: number = 5,
 ): QualityComponent {
   const activeRules = focusRules.filter((r) => r.enabled);
   if (activeRules.length === 0) {
     return { score: 100, weight: QUALITY_WEIGHTS.focus, label: 'Focus Time' };
   }
 
+  const allDays = new Set<string>();
+  for (const rule of activeRules) {
+    const ruleDays = (rule as unknown as Record<string, unknown>).days;
+    if (Array.isArray(ruleDays)) {
+      for (const d of ruleDays) {
+        allDays.add(d as string);
+      }
+    }
+  }
+  const schedulableDays = allDays.size > 0 ? allDays.size : 5;
   const effectiveDays = Math.max(1, Math.min(DAYS_PER_WEEK, schedulableDays));
   let targetDaily = activeRules.reduce((sum, r) => sum + (r.dailyTargetMinutes || 0), 0);
   if (targetDaily === 0) {
@@ -208,6 +218,16 @@ function scoreBuffers(
     Array.from(placements.entries())
       .map(([id, slot]) => ({ id, startMs: slot.start.getTime(), endMs: slot.end.getTime() }))
       .sort((a, b) => a.startMs - b.startMs);
+
+  // Safety check: binary search assumes non-overlapping placements.
+  // If overlaps are detected the compliance results would be unreliable.
+  for (let i = 1; i < sortedPlacements.length; i++) {
+    if (sortedPlacements[i].startMs < sortedPlacements[i - 1].endMs) {
+      // Overlapping placements detected — skip buffer scoring rather than
+      // returning misleading results.
+      return { score: 0, weight: QUALITY_WEIGHTS.buffers, label: 'Buffer Compliance' };
+    }
+  }
 
   for (const item of bufferedItems) {
     const slot = placements.get(item.id)!;
