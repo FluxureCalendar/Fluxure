@@ -23,15 +23,23 @@ function getPool(): pg.Pool {
       throw new Error('DATABASE_URL environment variable is required');
     }
     const isProduction = process.env.NODE_ENV === 'production';
-    const sslDisabled = process.env.DATABASE_SSL === 'false';
+    const sslEnv = (process.env.DATABASE_SSL ?? '').toLowerCase();
+    const TRUTHY = new Set(['true', 'yes', '1', 'on']);
+    const FALSY = new Set(['false', 'no', '0', 'off', '']);
 
-    // SSL enabled by default in production, disabled only with DATABASE_SSL=false
-    const sslConfig =
-      isProduction && !sslDisabled
-        ? { rejectUnauthorized: true }
-        : process.env.DATABASE_SSL === 'true'
-          ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
-          : false;
+    let sslEnabled: boolean;
+    if (TRUTHY.has(sslEnv)) {
+      sslEnabled = true;
+    } else if (FALSY.has(sslEnv)) {
+      sslEnabled = isProduction;
+    } else {
+      log.warn({ value: sslEnv }, 'Unrecognized DATABASE_SSL value, defaulting to false');
+      sslEnabled = false;
+    }
+
+    const sslConfig = sslEnabled
+      ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
+      : false;
 
     pool = new Pool({
       connectionString: databaseUrl,

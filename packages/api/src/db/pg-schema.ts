@@ -1,5 +1,6 @@
 import {
   pgTable,
+  pgEnum,
   uuid,
   text,
   integer,
@@ -9,33 +10,64 @@ import {
   index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { DEFAULT_CHUNK_MAX } from '@fluxure/shared';
+
+export const itemTypeEnum = pgEnum('item_type_enum', [
+  'habit',
+  'task',
+  'meeting',
+  'focus',
+  'external',
+]);
+
+export const eventStatusEnum = pgEnum('event_status_enum', ['free', 'busy', 'locked', 'completed']);
+
+export const taskStatusEnum = pgEnum('task_status_enum', ['open', 'done_scheduling', 'completed']);
+
+export const calendarModeEnum = pgEnum('calendar_mode_enum', ['writable', 'locked']);
+
+export const schedulingHoursEnum = pgEnum('scheduling_hours_enum', [
+  'working',
+  'personal',
+  'custom',
+]);
+
+export const frequencyEnum = pgEnum('frequency_enum', ['daily', 'weekly', 'monthly', 'custom']);
 
 // ============================================================
 // Users
 // ============================================================
-export const users = pgTable('users', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  email: text('email').unique().notNull(),
-  emailVerified: boolean('email_verified').default(false).notNull(),
-  passwordHash: text('password_hash'),
-  name: text('name'),
-  avatarUrl: text('avatar_url'),
-  googleId: text('google_id').unique(),
-  googleRefreshToken: text('google_refresh_token'),
-  googleSyncToken: text('google_sync_token'),
-  settings: jsonb('settings'),
-  plan: text('plan').default('free').notNull(),
-  stripeCustomerId: text('stripe_customer_id').unique(),
-  stripeSubscriptionId: text('stripe_subscription_id'),
-  planPeriodEnd: timestamp('plan_period_end', { withTimezone: true, mode: 'string' }),
-  billingInterval: text('billing_interval'),
-  paymentStatus: text('payment_status'),
-  onboardingCompleted: boolean('onboarding_completed').default(false).notNull(),
-  gdprConsentAt: timestamp('gdpr_consent_at', { withTimezone: true, mode: 'string' }),
-  consentVersion: text('consent_version'),
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-});
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: text('email').unique().notNull(),
+    emailVerified: boolean('email_verified').default(false).notNull(),
+    passwordHash: text('password_hash'),
+    name: text('name'),
+    avatarUrl: text('avatar_url'),
+    googleId: text('google_id').unique(),
+    googleRefreshToken: text('google_refresh_token'),
+    googleSyncToken: text('google_sync_token'),
+    settings: jsonb('settings'),
+    plan: text('plan').default('free').notNull(),
+    stripeCustomerId: text('stripe_customer_id').unique(),
+    stripeSubscriptionId: text('stripe_subscription_id'),
+    planPeriodEnd: timestamp('plan_period_end', { withTimezone: true, mode: 'string' }),
+    billingInterval: text('billing_interval'),
+    paymentStatus: text('payment_status'),
+    onboardingCompleted: boolean('onboarding_completed').default(false).notNull(),
+    gdprConsentAt: timestamp('gdpr_consent_at', { withTimezone: true, mode: 'string' }),
+    consentVersion: text('consent_version'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index('idx_users_stripe_subscription').on(table.stripeSubscriptionId)],
+);
 
 // ============================================================
 // Sessions
@@ -120,7 +152,7 @@ export const calendars = pgTable(
     googleCalendarId: text('google_calendar_id').notNull(),
     name: text('name').notNull(),
     color: text('color').default('#4285f4').notNull(),
-    mode: text('mode').default('writable').notNull(),
+    mode: calendarModeEnum('mode').default('writable').notNull(),
     enabled: boolean('enabled').default(true).notNull(),
     isPrimary: boolean('is_primary').default(false).notNull(),
     syncToken: text('sync_token'),
@@ -128,13 +160,18 @@ export const calendars = pgTable(
     watchResourceId: text('watch_resource_id'),
     watchToken: text('watch_token'),
     watchExpiresAt: timestamp('watch_expires_at', { withTimezone: true, mode: 'string' }),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     index('idx_calendars_user_id').on(table.userId),
     index('idx_calendars_watch_channel_id').on(table.watchChannelId),
     index('idx_calendars_user_id_enabled').on(table.userId, table.enabled),
+    uniqueIndex('idx_calendars_user_google_cal').on(table.userId, table.googleCalendarId),
   ],
 );
 
@@ -155,23 +192,28 @@ export const habits = pgTable(
     idealTime: text('ideal_time').notNull(),
     durationMin: integer('duration_min').notNull(),
     durationMax: integer('duration_max').notNull(),
-    frequency: text('frequency').notNull(),
-    frequencyConfig: jsonb('frequency_config'),
-    schedulingHours: text('scheduling_hours').default('working'),
-    forced: boolean('forced').default(false),
-    autoDecline: boolean('auto_decline').default(false),
+    days: jsonb('days').notNull().$type<string[]>(),
+    schedulingHours: schedulingHoursEnum('scheduling_hours').default('working'),
+    forced: boolean('forced').default(false).notNull(),
+    autoDecline: boolean('auto_decline').default(false).notNull(),
     dependsOn: text('depends_on'),
-    enabled: boolean('enabled').default(true),
-    skipBuffer: boolean('skip_buffer').default(false),
-    notifications: boolean('notifications').default(false),
-    calendarId: text('calendar_id'),
+    enabled: boolean('enabled').default(true).notNull(),
+    skipBuffer: boolean('skip_buffer').default(false).notNull(),
+    notifications: boolean('notifications').default(false).notNull(),
+    calendarId: uuid('calendar_id').references(() => calendars.id, { onDelete: 'set null' }),
     color: text('color'),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     index('idx_habits_user_id').on(table.userId),
     index('idx_habits_user_id_enabled').on(table.userId, table.enabled),
+    index('idx_habits_user_calendar').on(table.userId, table.calendarId),
+    index('idx_habits_name_trgm').using('gin', table.name),
   ],
 );
 
@@ -192,20 +234,27 @@ export const tasks = pgTable(
     dueDate: text('due_date'),
     earliestStart: text('earliest_start'),
     chunkMin: integer('chunk_min').default(15),
-    chunkMax: integer('chunk_max').default(120),
-    schedulingHours: text('scheduling_hours'),
-    status: text('status').default('open'),
-    isUpNext: boolean('is_up_next').default(false),
-    skipBuffer: boolean('skip_buffer').default(false),
+    chunkMax: integer('chunk_max').default(DEFAULT_CHUNK_MAX),
+    schedulingHours: schedulingHoursEnum('scheduling_hours'),
+    status: taskStatusEnum('status').default('open'),
+    isUpNext: boolean('is_up_next').default(false).notNull(),
+    skipBuffer: boolean('skip_buffer').default(false).notNull(),
     enabled: boolean('enabled').default(true).notNull(),
-    calendarId: text('calendar_id'),
+    calendarId: uuid('calendar_id').references(() => calendars.id, { onDelete: 'set null' }),
     color: text('color'),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     index('idx_tasks_user_id').on(table.userId),
     index('idx_tasks_user_id_enabled_status').on(table.userId, table.enabled, table.status),
+    index('idx_tasks_user_id_status').on(table.userId, table.status),
+    index('idx_tasks_user_calendar').on(table.userId, table.calendarId),
+    index('idx_tasks_name_trgm').using('gin', table.name),
   ],
 );
 
@@ -223,20 +272,29 @@ export const smartMeetings = pgTable(
     priority: integer('priority').default(2),
     attendees: jsonb('attendees'),
     duration: integer('duration').notNull(),
-    frequency: text('frequency').notNull(),
+    frequency: frequencyEnum('frequency').notNull(),
     idealTime: text('ideal_time'),
     windowStart: text('window_start'),
     windowEnd: text('window_end'),
     location: text('location'),
     conferenceType: text('conference_type'),
-    skipBuffer: boolean('skip_buffer').default(false),
+    skipBuffer: boolean('skip_buffer').default(false).notNull(),
     enabled: boolean('enabled').default(true).notNull(),
-    calendarId: text('calendar_id'),
+    calendarId: uuid('calendar_id').references(() => calendars.id, { onDelete: 'set null' }),
     color: text('color'),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
-  (table) => [index('idx_smart_meetings_user_id').on(table.userId)],
+  (table) => [
+    index('idx_smart_meetings_user_id').on(table.userId),
+    index('idx_smart_meetings_user_calendar').on(table.userId, table.calendarId),
+    index('idx_smart_meetings_user_enabled').on(table.userId, table.enabled),
+    index('idx_smart_meetings_name_trgm').using('gin', table.name),
+  ],
 );
 
 // ============================================================
@@ -251,30 +309,18 @@ export const focusTimeRules = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     weeklyTargetMinutes: integer('weekly_target_minutes'),
     dailyTargetMinutes: integer('daily_target_minutes'),
-    schedulingHours: text('scheduling_hours'),
-    enabled: boolean('enabled').default(true),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    schedulingHours: schedulingHoursEnum('scheduling_hours'),
+    windowStart: text('window_start'),
+    windowEnd: text('window_end'),
+    enabled: boolean('enabled').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [uniqueIndex('idx_focus_time_rules_user_id_unique').on(table.userId)],
-);
-
-// ============================================================
-// Buffer Config
-// ============================================================
-export const bufferConfig = pgTable(
-  'buffer_config',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    travelTimeMinutes: integer('travel_time_minutes').default(15),
-    decompressionMinutes: integer('decompression_minutes').default(10),
-    breakBetweenItemsMinutes: integer('break_between_items_minutes').default(5),
-    applyDecompressionTo: text('apply_decompression_to').default('all'),
-  },
-  (table) => [uniqueIndex('idx_buffer_config_user_id_unique').on(table.userId)],
 );
 
 // ============================================================
@@ -287,24 +333,29 @@ export const scheduledEvents = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    itemType: text('item_type').notNull(),
+    itemType: itemTypeEnum('item_type').notNull(),
     itemId: text('item_id').notNull(),
     title: text('title').notNull(),
     googleEventId: text('google_event_id'),
-    calendarId: text('calendar_id'),
-    start: text('start').notNull(),
-    end: text('end').notNull(),
-    status: text('status').default('free'),
-    isAllDay: boolean('is_all_day').default(false),
+    calendarId: uuid('calendar_id').references(() => calendars.id, { onDelete: 'set null' }),
+    start: timestamp('start', { withTimezone: true, mode: 'string' }).notNull(),
+    end: timestamp('end', { withTimezone: true, mode: 'string' }).notNull(),
+    status: eventStatusEnum('status').default('free'),
+    isAllDay: boolean('is_all_day').default(false).notNull(),
     alternativeSlotsCount: integer('alternative_slots_count'),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     index('idx_scheduled_events_user_id').on(table.userId),
     index('idx_scheduled_events_user_id_end').on(table.userId, table.end),
     index('idx_scheduled_events_user_id_start_end').on(table.userId, table.start, table.end),
     index('idx_scheduled_events_user_id_item_id').on(table.userId, table.itemId),
+    index('idx_scheduled_events_user_calendar').on(table.userId, table.calendarId),
   ],
 );
 
@@ -318,15 +369,19 @@ export const calendarEvents = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    calendarId: text('calendar_id').notNull(),
+    calendarId: uuid('calendar_id')
+      .notNull()
+      .references(() => calendars.id, { onDelete: 'cascade' }),
     googleEventId: text('google_event_id').notNull(),
     title: text('title').notNull(),
-    start: text('start').notNull(),
-    end: text('end').notNull(),
+    start: timestamp('start', { withTimezone: true, mode: 'string' }).notNull(),
+    end: timestamp('end', { withTimezone: true, mode: 'string' }).notNull(),
     status: text('status').default('busy'),
     location: text('location'),
-    isAllDay: boolean('is_all_day').default(false),
-    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    isAllDay: boolean('is_all_day').default(false).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     index('idx_calendar_events_user_id').on(table.userId),
@@ -334,6 +389,7 @@ export const calendarEvents = pgTable(
     index('idx_calendar_events_user_id_start_end').on(table.userId, table.start, table.end),
     uniqueIndex('idx_calendar_events_user_google_event').on(table.userId, table.googleEventId),
     index('idx_calendar_events_user_calendar').on(table.userId, table.calendarId),
+    index('idx_calendar_events_title_trgm').using('gin', table.title),
   ],
 );
 
@@ -347,9 +403,11 @@ export const habitCompletions = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    habitId: text('habit_id').notNull(),
+    habitId: uuid('habit_id')
+      .notNull()
+      .references(() => habits.id, { onDelete: 'cascade' }),
     scheduledDate: text('scheduled_date').notNull(),
-    completedAt: text('completed_at').notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }).notNull(),
   },
   (table) => [
     index('idx_habit_completions_user_id').on(table.userId),
@@ -373,11 +431,15 @@ export const subtasks = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    taskId: text('task_id').notNull(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
-    completed: boolean('completed').default(false),
+    completed: boolean('completed').default(false).notNull(),
     sortOrder: integer('sort_order').default(0),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     index('idx_subtasks_user_id').on(table.userId),
@@ -399,7 +461,9 @@ export const activityLog = pgTable(
     entityType: text('entity_type').notNull(),
     entityId: text('entity_id').notNull(),
     details: jsonb('details'),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     index('idx_activity_log_user_id').on(table.userId),
@@ -420,13 +484,13 @@ export const scheduleChanges = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     operationType: text('operation_type').notNull(),
-    itemType: text('item_type').notNull(),
+    itemType: itemTypeEnum('item_type').notNull(),
     itemId: text('item_id').notNull(),
     itemName: text('item_name').notNull(),
-    previousStart: text('previous_start'),
-    previousEnd: text('previous_end'),
-    newStart: text('new_start'),
-    newEnd: text('new_end'),
+    previousStart: timestamp('previous_start', { withTimezone: true, mode: 'string' }),
+    previousEnd: timestamp('previous_end', { withTimezone: true, mode: 'string' }),
+    newStart: timestamp('new_start', { withTimezone: true, mode: 'string' }),
+    newEnd: timestamp('new_end', { withTimezone: true, mode: 'string' }),
     reason: text('reason'),
     batchId: text('batch_id').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
@@ -447,6 +511,7 @@ export const oauthStates = pgTable(
   {
     stateHash: text('state_hash').primaryKey(),
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    intent: text('intent').default('login').notNull(), // 'login' or 'signup'
   },
   (table) => [index('idx_oauth_states_expires_at').on(table.expiresAt)],
 );
@@ -471,19 +536,26 @@ export const schedulingTemplates = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (table) => [index('idx_scheduling_templates_user_id').on(table.userId)],
+  (table) => [
+    index('idx_scheduling_templates_user_id').on(table.userId),
+    uniqueIndex('idx_scheduling_templates_user_name').on(table.userId, table.name),
+  ],
 );
 
 // ============================================================
 // Stripe Webhook Events
 // ============================================================
-export const stripeWebhookEvents = pgTable('stripe_webhook_events', {
-  id: text('id').primaryKey(),
-  eventType: text('event_type').notNull(),
-  processedAt: timestamp('processed_at', { withTimezone: true, mode: 'string' })
-    .defaultNow()
-    .notNull(),
-});
+export const stripeWebhookEvents = pgTable(
+  'stripe_webhook_events',
+  {
+    id: text('id').primaryKey(),
+    eventType: text('event_type').notNull(),
+    processedAt: timestamp('processed_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index('idx_stripe_webhook_events_processed_at').on(table.processedAt)],
+);
 
 // ============================================================
 // Scheduling Links
@@ -498,11 +570,15 @@ export const schedulingLinks = pgTable(
     slug: text('slug').unique().notNull(),
     name: text('name').notNull(),
     durations: jsonb('durations'),
-    schedulingHours: text('scheduling_hours'),
+    schedulingHours: schedulingHoursEnum('scheduling_hours'),
     priority: integer('priority').default(3),
-    enabled: boolean('enabled').default(true),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    enabled: boolean('enabled').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [index('idx_scheduling_links_user_id').on(table.userId)],
 );
