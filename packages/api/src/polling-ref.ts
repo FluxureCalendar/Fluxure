@@ -25,7 +25,7 @@ export function triggerReschedule(reason: string, userId?: string): void {
         const queue = getRescheduleQueue();
         if (queue) {
           queue
-            .add('reschedule', { userId, reason }, { jobId: `reschedule:${userId}` })
+            .add('reschedule', { userId, reason }, { jobId: `reschedule-${userId}` })
             .catch((qErr) => {
               log.error({ userId, reason, err: qErr }, 'Failed to enqueue reschedule');
             });

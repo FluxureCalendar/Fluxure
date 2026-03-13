@@ -1,7 +1,6 @@
-import dotenv from 'dotenv';
+// dotenv is loaded via --import ./src/env.ts preload (see package.json scripts)
 import { resolve } from 'path';
-import { readFileSync } from 'fs';
-dotenv.config({ path: resolve(import.meta.dirname, '../../../.env') });
+import { readFileSync, existsSync } from 'fs';
 
 const APP_VERSION = JSON.parse(
   readFileSync(resolve(import.meta.dirname, '../package.json'), 'utf-8'),
@@ -19,25 +18,27 @@ import {
   JSON_BODY_LIMIT,
   SHUTDOWN_TIMEOUT_MS,
   allowedOrigins,
+  isSelfHosted,
+  isStripeConfigured,
 } from './config.js';
 import { logger, createLogger } from './logger.js';
 
 const log = createLogger('server');
 
-// Validate required environment variables in production
+// Validate critical environment variables unconditionally
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL must be set');
+}
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < MIN_JWT_SECRET_LENGTH) {
+  throw new Error(`JWT_SECRET must be set and be at least ${MIN_JWT_SECRET_LENGTH} characters`);
+}
+// Note: refresh tokens are opaque hex strings (crypto.randomBytes), not signed JWTs.
+// No JWT_REFRESH_SECRET is needed — refresh tokens are looked up by hash in the sessions table.
+
+// Production-only checks
 if (process.env.NODE_ENV === 'production') {
-  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < MIN_JWT_SECRET_LENGTH) {
-    throw new Error(
-      `JWT_SECRET must be set in production and be at least ${MIN_JWT_SECRET_LENGTH} characters`,
-    );
-  }
-  // Note: refresh tokens are opaque hex strings (crypto.randomBytes), not signed JWTs.
-  // No JWT_REFRESH_SECRET is needed — refresh tokens are looked up by hash in the sessions table.
   if (!process.env.CORS_ORIGIN) {
     throw new Error('CORS_ORIGIN must be set in production');
-  }
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL must be set in production');
   }
   if (!process.env.ENCRYPTION_KEY) {
     throw new Error('ENCRYPTION_KEY must be set in production');
@@ -53,9 +54,6 @@ if (process.env.ENCRYPTION_KEY && !/^[0-9a-fA-F]{64}$/.test(process.env.ENCRYPTI
   throw new Error('ENCRYPTION_KEY must be exactly 64 hex characters (256 bits for AES-256-GCM)');
 }
 if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in production');
-  }
   log.warn(
     'GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set — Google Calendar integration will not work',
   );
@@ -63,6 +61,12 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
 if (process.env.NODE_ENV === 'production' && !process.env.SMTP_HOST) {
   log.warn(
     'SMTP_HOST is not set in production — email verification and password reset will log to console instead of sending emails',
+  );
+}
+if (process.env.NODE_ENV === 'production' && !isSelfHosted() && !isStripeConfigured()) {
+  throw new Error(
+    'STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must be set in cloud production deployments. ' +
+      'Set SELF_HOSTED=true if running without Stripe billing.',
   );
 }
 
@@ -78,7 +82,6 @@ import habitsRouter from './routes/habits.js';
 import tasksRouter from './routes/tasks.js';
 import meetingsRouter from './routes/meetings.js';
 import focusRouter from './routes/focus.js';
-import buffersRouter from './routes/buffers.js';
 import scheduleRouter from './routes/schedule.js';
 import linksRouter from './routes/links.js';
 import analyticsRouter from './routes/analytics.js';
@@ -103,6 +106,12 @@ if (trustProxyEnv !== undefined && trustProxyEnv !== '' && isNaN(parseInt(trustP
 }
 app.set('trust proxy', trustProxyEnv ? parseInt(trustProxyEnv, 10) : 0);
 if (process.env.NODE_ENV === 'production' && !trustProxyEnv) {
+  if (!isSelfHosted()) {
+    throw new Error(
+      'TRUST_PROXY must be set in cloud production (number of trusted proxy hops, e.g., 1). ' +
+        'Without it, rate limiting sees the proxy IP instead of client IPs.',
+    );
+  }
   log.warn('TRUST_PROXY is not set — rate limiting may be ineffective behind a reverse proxy');
 }
 const PORT = CONFIG_PORT;
@@ -210,6 +219,32 @@ const authLimiter = rateLimit({
 });
 app.use('/api/auth/google', authLimiter);
 
+// Rate limit write-heavy endpoints that trigger Google API calls + reschedule
+const mutationLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+  store: createStore('mutation'),
+  skip: (req) => req.method === 'GET',
+});
+app.use('/api/habits', mutationLimiter);
+app.use('/api/tasks', mutationLimiter);
+app.use('/api/meetings', mutationLimiter);
+app.use('/api/focus-time', mutationLimiter);
+app.use('/api/schedule/actions', mutationLimiter);
+
+const discoverLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many discovery requests, please try again later.' },
+  store: createStore('discover'),
+});
+app.use('/api/calendars/discover', discoverLimiter);
+
 import { requireAuth } from './middleware/auth.js';
 
 const PUBLIC_ROUTE_PATTERNS: RegExp[] = [
@@ -267,7 +302,6 @@ app.use('/api/habits', habitsRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/meetings', meetingsRouter);
 app.use('/api/focus-time', focusRouter);
-app.use('/api/buffers', buffersRouter);
 app.use('/api/schedule', scheduleRouter);
 app.use('/api/links', linksRouter);
 app.use('/api/analytics', analyticsRouter);
@@ -282,9 +316,34 @@ app.use('/api/webhooks', webhooksRouter);
 app.use('/api/scheduling-templates', schedulingTemplatesRouter);
 app.use('/api/billing', billingRouter);
 
-app.use((_req: express.Request, res: express.Response) => {
-  res.status(404).json({ error: 'Not found' });
-});
+// In production Docker image, /app/public contains the built SvelteKit frontend.
+// In development, this directory doesn't exist and the API serves only /api routes.
+const publicDir = resolve(import.meta.dirname, '../../../public');
+
+if (existsSync(publicDir)) {
+  // Immutable hashed assets get long cache; index.html must not be cached
+  app.use(
+    '/_app',
+    express.static(resolve(publicDir, '_app'), {
+      maxAge: '1y',
+      immutable: true,
+    }),
+  );
+  app.use(express.static(publicDir, { index: false }));
+
+  // SPA fallback — serve index.html for all non-API routes
+  app.use((req: express.Request, res: express.Response) => {
+    if (req.path.startsWith('/api/')) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    res.sendFile(resolve(publicDir, 'index.html'));
+  });
+} else {
+  app.use((_req: express.Request, res: express.Response) => {
+    res.status(404).json({ error: 'Not found' });
+  });
+}
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   log.error({ err }, 'Unhandled error');
@@ -302,10 +361,8 @@ import { initWebSocket, closeWebSocket } from './ws.js';
 // ============================================================
 
 async function startServer() {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error('DATABASE_URL must be set');
-  }
+  // DATABASE_URL is already validated at module load (line 29-31)
+  const databaseUrl = process.env.DATABASE_URL!;
 
   // Fail fast with actionable error if database is unreachable
   try {

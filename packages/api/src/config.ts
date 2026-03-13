@@ -2,6 +2,9 @@
  * Resolved runtime configuration — the single env-override layer for the API.
  * Every process.env read happens here; consumers import resolved values.
  * All values are read once at module load time for consistency.
+ *
+ * IMPORTANT: dotenv must be loaded BEFORE this module evaluates.
+ * This is handled by the --import ./src/env.ts preload in package.json scripts.
  */
 
 import { randomUUID } from 'crypto';
@@ -23,6 +26,7 @@ import {
   CANDIDATE_STEP_MINUTES as CANDIDATE_STEP_MINUTES_SHARED,
   WATCH_RENEWAL_BUFFER_MS as WATCH_RENEWAL_BUFFER_MS_SHARED,
   WATCH_RENEWAL_CHECK_MS_DEFAULT,
+  DEFAULT_WATCH_TTL_MS,
   SCHEDULE_CHANGES_RETENTION_DAYS_DEFAULT,
   PG_POOL_MAX_DEFAULT,
   PG_IDLE_TIMEOUT_MS_DEFAULT,
@@ -36,7 +40,11 @@ function envInt(key: string, defaultValue: number): number {
   const raw = process.env[key];
   if (!raw) return defaultValue;
   const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) ? parsed : defaultValue;
+  if (!Number.isFinite(parsed)) {
+    console.warn(`[config] ${key}='${raw}' is not a valid integer, using default ${defaultValue}`);
+    return defaultValue;
+  }
+  return parsed;
 }
 
 function envStr(key: string, defaultValue: string): string {
@@ -94,8 +102,8 @@ export const POLL_INTERVAL_MS = envInt('POLL_INTERVAL_MS', MS_PER_MINUTE);
 /** Fallback polling interval in push mode (ms). Default: 30 min */
 export const PUSH_FALLBACK_POLL_MS = envInt('PUSH_FALLBACK_POLL_MS', 30 * MS_PER_MINUTE);
 
-/** TTL for Google Calendar watch channels (ms). Default: 30 days */
-export const WATCH_CHANNEL_TTL_MS = envInt('WATCH_CHANNEL_TTL_DAYS', 30) * MS_PER_DAY;
+/** TTL for Google Calendar watch channels (ms). Google Calendar API max is 7 days. */
+export const WATCH_CHANNEL_TTL_MS = DEFAULT_WATCH_TTL_MS;
 
 /** How often to check for expiring watch channels (ms). Default: 6 hours */
 export const WATCH_RENEWAL_CHECK_MS = envInt(
@@ -148,10 +156,20 @@ export const REDIS_CONNECT_TIMEOUT_MS = envInt(
   REDIS_CONNECT_TIMEOUT_MS_DEFAULT,
 );
 
+// ── Self-Hosted ─────────────────────────────────────────────
+
+/** When true, all users get Pro plan limits without Stripe billing. */
+export function isSelfHosted(): boolean {
+  return process.env.SELF_HOSTED === 'true';
+}
+
 // ── Stripe ──────────────────────────────────────────────────
-// Stripe config uses lazy getters because dotenv.config() runs at the top of
-// index.ts but ES module imports are hoisted above it, so process.env isn't
-// populated yet when this module first evaluates.
+// Stripe uses lazy getters because keys may be absent in self-hosted/dev mode.
+
+/** Whether Stripe billing is configured (keys are present). */
+export function isStripeConfigured(): boolean {
+  return !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET);
+}
 
 /** Stripe secret API key (read lazily from process.env) */
 export function getStripeSecretKey(): string {
