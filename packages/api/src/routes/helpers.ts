@@ -2,8 +2,8 @@ import { type Response } from 'express';
 import { type ZodError } from 'zod/v4';
 
 export function sendValidationError(res: Response, error: ZodError) {
-  const details = process.env.NODE_ENV !== 'production' ? error.issues : undefined;
-  return res.status(400).json({ error: 'Validation failed', ...(details ? { details } : {}) });
+  const details = error.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
+  return res.status(400).json({ error: 'Validation failed', details });
 }
 
 export function sendNotFound(res: Response, entity: string) {

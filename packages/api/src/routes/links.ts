@@ -18,8 +18,10 @@ import {
   BOOKING_MIN_LEAD_TIME_MS,
   BOOKING_WINDOW_DAYS,
   addDays,
+  DEFAULT_TIMEZONE,
   setTimeInTz,
   parseTime,
+  parseISO,
   minutesSinceMidnightInTz,
   parseTimeToMinutes,
 } from '@fluxure/shared';
@@ -34,6 +36,7 @@ import { asyncHandler } from '../middleware/async-handler.js';
 import { invalidateBookingAvailability } from './booking.js';
 import { triggerReschedule } from '../polling-ref.js';
 import { broadcastToUser } from '../ws.js';
+import { buildUpdates } from '../utils/route-helpers.js';
 
 import { paginationSchema } from '../validation.js';
 
@@ -97,7 +100,7 @@ router.post(
       slug: body.slug,
       name: body.name,
       durations: body.durations,
-      schedulingHours: body.schedulingHours ?? 'working',
+      schedulingHours: body.schedulingHours ?? ('working' as const),
       priority: body.priority ?? 3,
       enabled: true,
     };
@@ -134,17 +137,17 @@ router.put(
     }
 
     const body = parsed.data;
-    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
-
-    if (body.name !== undefined) updates.name = body.name;
-    if (body.slug !== undefined) {
-      // Rely on DB unique constraint rather than pre-flight check
-      updates.slug = body.slug;
-    }
-    if (body.durations !== undefined) updates.durations = body.durations;
-    if (body.schedulingHours !== undefined) updates.schedulingHours = body.schedulingHours;
-    if (body.priority !== undefined) updates.priority = body.priority;
-    if (body.enabled !== undefined) updates.enabled = body.enabled;
+    const updates: Record<string, unknown> = {
+      ...buildUpdates(body, [
+        'name',
+        'slug',
+        'durations',
+        'schedulingHours',
+        'priority',
+        'enabled',
+      ] as const),
+      updatedAt: new Date().toISOString(),
+    };
 
     try {
       const updated = await db
@@ -228,7 +231,7 @@ router.get(
         : DEFAULT_USER_SETTINGS;
 
     const hoursWindow = getHoursWindow(schedulingHours, userSettings);
-    const userTimezone = userSettings.timezone || 'America/New_York';
+    const userTimezone = userSettings.timezone || DEFAULT_TIMEZONE;
     const windowStartParsed = parseTime(hoursWindow.start) ?? { hours: 9, minutes: 0 };
     const windowEndParsed = parseTime(hoursWindow.end) ?? { hours: 17, minutes: 0 };
 
@@ -362,8 +365,8 @@ router.post(
     }
 
     const { start, end, name, email } = parsed.data;
-    const startDate = new Date(start);
-    const endDate = new Date(end);
+    const startDate = parseISO(start);
+    const endDate = parseISO(end);
 
     if (startDate.getTime() <= Date.now()) {
       sendError(res, 400, 'Start time must be in the future');
@@ -380,14 +383,14 @@ router.post(
     const userSettings = await getUserSettingsCached(link.userId);
     const schedulingHours = (link.schedulingHours ?? 'working') as SchedulingHours;
     const hoursWindow = getHoursWindow(schedulingHours, userSettings);
-    const userTimezone = userSettings.timezone || 'America/New_York';
+    const userTimezone = userSettings.timezone || DEFAULT_TIMEZONE;
 
     const startMinutes = minutesSinceMidnightInTz(startDate, userTimezone);
     const endMinutes = minutesSinceMidnightInTz(endDate, userTimezone);
     const windowStartMinutes = parseTimeToMinutes(hoursWindow.start);
     const windowEndMinutes = parseTimeToMinutes(hoursWindow.end);
 
-    if (windowStartMinutes < 0 || windowEndMinutes < 0) {
+    if (windowStartMinutes === null || windowEndMinutes === null) {
       sendError(res, 500, 'Invalid booking hours configuration');
       return;
     }
