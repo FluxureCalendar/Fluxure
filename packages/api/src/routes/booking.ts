@@ -15,12 +15,14 @@ import {
   BOOKING_SLOT_STEP_MS,
   BOOKING_MIN_LEAD_TIME_MS,
   DEFAULT_BOOKING_DURATIONS,
+  DEFAULT_TIMEZONE,
   RATE_LIMIT,
   AVAILABILITY_CACHE_TTL_S,
   startOfDayInTz,
   nextDayInTz,
   setTimeInTz,
   parseTime,
+  parseISO,
   toDateStr,
   minutesSinceMidnightInTz,
   parseTimeToMinutes,
@@ -179,7 +181,7 @@ router.get(
       name: link.name,
       durations: (link.durations ?? [...DEFAULT_BOOKING_DURATIONS]) as number[],
       enabled: true,
-      timezone: userSettings.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      timezone: userSettings.timezone || DEFAULT_TIMEZONE,
     };
     res.json(info);
   }),
@@ -246,7 +248,7 @@ router.get(
     const ownerPlan = ownerRows[0]?.plan ?? 'free';
     const limits = getPlanLimits(ownerPlan);
 
-    const userTimezone = userSettings.timezone || 'America/New_York';
+    const userTimezone = userSettings.timezone || DEFAULT_TIMEZONE;
     const schedulingHours = (link.schedulingHours ?? 'working') as SchedulingHours;
     const hoursWindow = getHoursWindow(schedulingHours, userSettings);
 
@@ -355,8 +357,8 @@ router.post(
     }
     const name = stripAllHtml(rawName);
     const notes = rawNotes ? stripAllHtml(rawNotes) || undefined : undefined;
-    const startDate = new Date(start);
-    const endDate = new Date(end);
+    const startDate = parseISO(start);
+    const endDate = parseISO(end);
 
     const totalDurationMin = Math.round((endDate.getTime() - startDate.getTime()) / 60000);
     if (totalDurationMin > MAX_BOOKING_DURATION_MIN) {
@@ -382,14 +384,14 @@ router.post(
     const userSettings = await getUserSettingsForLink(link.userId);
     const schedulingHours = (link.schedulingHours ?? 'working') as SchedulingHours;
     const hoursWindow = getHoursWindow(schedulingHours, userSettings);
-    const userTimezone = userSettings.timezone || 'America/New_York';
+    const userTimezone = userSettings.timezone || DEFAULT_TIMEZONE;
 
     const startMinutes = minutesSinceMidnightInTz(startDate, userTimezone);
     const endMinutes = minutesSinceMidnightInTz(endDate, userTimezone);
     const windowStartMinutes = parseTimeToMinutes(hoursWindow.start);
     const windowEndMinutes = parseTimeToMinutes(hoursWindow.end);
 
-    if (windowStartMinutes < 0 || windowEndMinutes < 0) {
+    if (windowStartMinutes === null || windowEndMinutes === null) {
       sendError(res, 500, 'Invalid booking hours configuration');
       return;
     }

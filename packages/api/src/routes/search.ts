@@ -1,9 +1,8 @@
 import { Router } from 'express';
-import { ilike, and, eq } from 'drizzle-orm';
+import { eq, and, gte } from 'drizzle-orm';
 import rateLimit from 'express-rate-limit';
 import { db } from '../db/pg-index.js';
-import { habits, tasks, smartMeetings, calendarEvents } from '../db/pg-schema.js';
-import { sendError } from './helpers.js';
+import { habits, tasks, calendarEvents } from '../db/pg-schema.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { createStore } from '../rate-limiters.js';
 
@@ -16,61 +15,60 @@ const searchLimiter = rateLimit({
   store: createStore('search'),
 });
 
-// GET /api/search?q=... — search across habits, tasks, meetings, and events
+// GET /api/search/index — returns all user items for client-side filtering
 router.get(
-  '/',
+  '/index',
   searchLimiter,
   asyncHandler(async (req, res) => {
-    const q = req.query.q;
-    if (!q || typeof q !== 'string' || q.trim().length < 2) {
-      res.json({ results: [] });
-      return;
-    }
-    if (q.length > 100) {
-      sendError(res, 400, 'Search query too long');
-      return;
-    }
-
-    const escaped = q.trim().replace(/[%_\\]/g, (ch) => `\\${ch}`);
-    const pattern = `%${escaped}%`;
     const userId = req.userId;
 
-    // Column projection: only fetch id + name/title needed for search results
-    const [habitResults, taskResults, meetingResults, eventResults] = await Promise.all([
+    // Events bounded to past 7 days + next 30 days
+    const now = new Date();
+    const pastBound = new Date(now);
+    pastBound.setDate(pastBound.getDate() - 7);
+    const pastBoundISO = pastBound.toISOString();
+
+    const [habitRows, taskRows, eventRows] = await Promise.all([
       db
-        .select({ id: habits.id, name: habits.name })
+        .select({
+          id: habits.id,
+          name: habits.name,
+          priority: habits.priority,
+          color: habits.color,
+          enabled: habits.enabled,
+          days: habits.days,
+        })
         .from(habits)
-        .where(and(eq(habits.userId, userId), ilike(habits.name, pattern)))
-        .limit(50),
+        .where(eq(habits.userId, userId)),
       db
-        .select({ id: tasks.id, name: tasks.name })
+        .select({
+          id: tasks.id,
+          name: tasks.name,
+          priority: tasks.priority,
+          color: tasks.color,
+          status: tasks.status,
+          dueDate: tasks.dueDate,
+          enabled: tasks.enabled,
+        })
         .from(tasks)
-        .where(and(eq(tasks.userId, userId), ilike(tasks.name, pattern)))
-        .limit(50),
+        .where(eq(tasks.userId, userId)),
       db
-        .select({ id: smartMeetings.id, name: smartMeetings.name })
-        .from(smartMeetings)
-        .where(and(eq(smartMeetings.userId, userId), ilike(smartMeetings.name, pattern)))
-        .limit(50),
-      db
-        .select({ id: calendarEvents.id, title: calendarEvents.title })
+        .select({
+          id: calendarEvents.id,
+          title: calendarEvents.title,
+          start: calendarEvents.start,
+          end: calendarEvents.end,
+          isAllDay: calendarEvents.isAllDay,
+        })
         .from(calendarEvents)
-        .where(and(eq(calendarEvents.userId, userId), ilike(calendarEvents.title, pattern)))
-        .limit(50),
+        .where(and(eq(calendarEvents.userId, userId), gte(calendarEvents.end, pastBoundISO))),
     ]);
 
     res.json({
-      results: [
-        ...habitResults.map((h) => ({ type: 'habit', id: h.id, name: h.name, href: '/habits' })),
-        ...taskResults.map((t) => ({ type: 'task', id: t.id, name: t.name, href: '/tasks' })),
-        ...meetingResults.map((m) => ({
-          type: 'meeting',
-          id: m.id,
-          name: m.name,
-          href: '/meetings',
-        })),
-        ...eventResults.map((e) => ({ type: 'event', id: e.id, name: e.title, href: '/' })),
-      ],
+      habits: habitRows,
+      tasks: taskRows,
+      meetings: [],
+      events: eventRows,
     });
   }),
 );

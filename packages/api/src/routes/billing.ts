@@ -14,6 +14,7 @@ import {
   getStripeProMonthlyPriceId,
   getStripeProAnnualPriceId,
   FRONTEND_URL,
+  isSelfHosted,
 } from '../config.js';
 
 const log = createLogger('billing');
@@ -75,17 +76,25 @@ router.get(
       }
     }
 
+    const selfHosted = isSelfHosted();
+    const resolvedPlan = selfHosted ? 'pro' : effectivePlan;
+
     res.json({
-      plan: effectivePlan,
-      limits: getPlanLimits(effectivePlan),
-      billingInterval: user.billingInterval,
-      periodEnd: user.planPeriodEnd,
-      hasSubscription: !!user.stripeSubscriptionId,
-      isTrial: trial,
-      trialDaysRemaining: trial ? getTrialDaysRemaining(user.planPeriodEnd) : null,
-      paymentStatus: user.paymentStatus,
-      cancelAtPeriodEnd,
-      cancelAt,
+      plan: resolvedPlan,
+      limits: getPlanLimits(resolvedPlan),
+      billingInterval: selfHosted ? null : user.billingInterval,
+      periodEnd: selfHosted ? null : user.planPeriodEnd,
+      hasSubscription: selfHosted ? false : !!user.stripeSubscriptionId,
+      isTrial: selfHosted ? false : trial,
+      trialDaysRemaining: selfHosted
+        ? null
+        : trial
+          ? getTrialDaysRemaining(user.planPeriodEnd)
+          : null,
+      paymentStatus: selfHosted ? null : user.paymentStatus,
+      cancelAtPeriodEnd: selfHosted ? false : cancelAtPeriodEnd,
+      cancelAt: selfHosted ? null : cancelAt,
+      selfHosted,
     });
   }),
 );

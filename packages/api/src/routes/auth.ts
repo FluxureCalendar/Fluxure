@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { eq, and, gt, ne, sql, lt, asc, count } from 'drizzle-orm';
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import rateLimit from 'express-rate-limit';
+import { cancelAllForUser } from '../jobs/habit-auto-complete.js';
 import { z } from 'zod/v4';
 import { db, pool as getPool } from '../db/pg-index.js';
 import {
@@ -267,14 +268,7 @@ router.post(
 
     const existing = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
     if (existing.length > 0) {
-      if (existing[0].googleId) {
-        res.status(409).json({
-          error: 'An account with this email uses Google sign-in.',
-          code: 'GOOGLE_ACCOUNT',
-        });
-      } else {
-        sendError(res, 409, 'An account with this email already exists');
-      }
+      sendError(res, 409, 'An account with this email already exists');
       return;
     }
 
@@ -353,12 +347,8 @@ router.post(
       return;
     }
 
-    if (!user.passwordHash && user.googleId) {
-      res.status(409).json({ error: 'This account uses Google sign-in.', code: 'GOOGLE_ACCOUNT' });
-      return;
-    }
-
     if (!user.passwordHash) {
+      // Run dummy hash to equalize timing regardless of why there's no password
       await verifyPassword(password, '$2b$12$000000000000000000000uGbOQPJ9K7.1JCJfUnpDBqkEGfjXbkm');
       sendError(res, 401, 'Invalid email or password');
       return;
@@ -421,18 +411,49 @@ router.post(
 
       await client.query('DELETE FROM sessions WHERE id = $1', [session.id]);
 
-      await client.query('COMMIT');
+      // Create new session inside the same manual transaction for atomicity —
+      // prevents orphaned state if the app crashes between delete and insert.
+      // We inline the session insert here instead of calling createSession()
+      // because createSession() uses the Drizzle pool (separate connection).
+      const [user] = await db.select().from(users).where(eq(users.id, session.user_id));
+      if (!user) {
+        await client.query('ROLLBACK');
+        clearAuthCookies(res);
+        sendError(res, 401, 'User not found');
+        return;
+      }
 
-      const { accessToken, refreshToken } = await createSession(
-        session.user_id,
-        req.headers['user-agent'],
-        getClientIp(req),
+      const effectivePlan = getEffectivePlan({
+        plan: user.plan,
+        planPeriodEnd: user.planPeriodEnd,
+        stripeSubscriptionId: user.stripeSubscriptionId,
+      });
+
+      const accessToken = signAccessToken({
+        userId: user.id,
+        email: user.email,
+        plan: effectivePlan,
+        emailVerified: !!user.emailVerified,
+        hasGdprConsent: !!user.gdprConsentAt,
+        gdprConsentVersion: user.consentVersion ?? undefined,
+      });
+
+      const refreshToken = generateRefreshToken();
+      const refreshTokenHash = hashToken(refreshToken);
+      const userAgent = req.headers['user-agent']?.slice(0, 500) || null;
+      const ipAddress = maskIpAddress(getClientIp(req) || null);
+
+      await client.query(
+        `INSERT INTO sessions (id, user_id, refresh_token_hash, user_agent, ip_address, expires_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)`,
+        [session.user_id, refreshTokenHash, userAgent, ipAddress, getRefreshTokenExpiry()],
       );
+
+      await client.query('COMMIT');
       setAuthCookies(res, accessToken, refreshToken);
 
       // Include user so frontend doesn't need a separate GET /auth/me call
-      const [user] = await db.select().from(users).where(eq(users.id, session.user_id));
-      res.json({ success: true, user: user ? toAuthUser(user) : undefined });
+      res.json({ success: true, user: toAuthUser(user) });
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -484,28 +505,32 @@ router.get(
 
     const tokenHash = hashToken(token);
 
-    const [verification] = await db
-      .select()
-      .from(emailVerifications)
-      .where(
-        and(
-          eq(emailVerifications.tokenHash, tokenHash),
-          gt(emailVerifications.expiresAt, new Date().toISOString()),
-        ),
-      );
+    const result = await db.transaction(async (tx) => {
+      const [verification] = await tx
+        .select()
+        .from(emailVerifications)
+        .where(
+          and(
+            eq(emailVerifications.tokenHash, tokenHash),
+            gt(emailVerifications.expiresAt, new Date().toISOString()),
+          ),
+        );
 
-    if (!verification) {
-      sendError(res, 400, 'Invalid or expired verification token');
-      return;
-    }
+      if (!verification) return null;
 
-    await db.transaction(async (tx) => {
+      await tx.delete(emailVerifications).where(eq(emailVerifications.userId, verification.userId));
       await tx
         .update(users)
         .set({ emailVerified: true, updatedAt: new Date().toISOString() })
         .where(eq(users.id, verification.userId));
-      await tx.delete(emailVerifications).where(eq(emailVerifications.userId, verification.userId));
+
+      return verification;
     });
+
+    if (!result) {
+      sendError(res, 400, 'Invalid or expired verification token');
+      return;
+    }
 
     res.json({ success: true, message: 'Email verified successfully' });
   }),
@@ -612,7 +637,7 @@ router.post(
 
     // Pad response time to a minimum to reduce timing side-channel
     const elapsed = Date.now() - startTime;
-    const minResponseMs = 200;
+    const minResponseMs = 600;
     if (elapsed < minResponseMs) {
       await new Promise((resolve) => setTimeout(resolve, minResponseMs - elapsed));
     }
@@ -716,11 +741,12 @@ router.get(
   optionalAuth,
   asyncHandler(async (req, res) => {
     const oauth2Client = createOAuth2Client();
-    const state = randomBytes(16).toString('hex');
+    const state = randomBytes(32).toString('hex');
     const stateHash = createHash('sha256').update(state).digest('hex');
     const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL_MS_CONST).toISOString();
 
-    await db.insert(oauthStates).values({ stateHash, expiresAt });
+    const intent = req.query.intent === 'signup' ? 'signup' : 'login';
+    await db.insert(oauthStates).values({ stateHash, expiresAt, intent });
 
     // Prompt logic:
     // - 'select_account': explicit override from frontend (retry flow)
@@ -742,8 +768,13 @@ router.get(
         promptParam = 'consent'; // Need refresh_token — force consent
       }
       // Otherwise omit prompt — Google skips consent, we already have the token
+    } else {
+      // Logged-out user: always request consent to ensure we get a refresh_token
+      // for new sign-ups. Google will still show the familiar consent screen.
+      // Without this, Google may skip consent for users who previously authorized
+      // the app (e.g., after account deletion), returning no refresh_token.
+      promptParam = 'consent';
     }
-    // Logged-out user: omit prompt — Google shows consent only if app not yet authorized
 
     const url = oauth2Client.generateAuthUrl({
       access_type: 'offline',
@@ -780,71 +811,84 @@ function getFrontendOrigin(): string {
   }
 }
 
-/** Find or create user from Google OAuth profile and tokens. */
+/**
+ * Find or create user from Google OAuth profile and tokens.
+ * When intent is 'login', returns null if no existing account is found
+ * (instead of silently creating one). This ensures new users must go
+ * through the signup flow where GDPR consent is explicitly collected.
+ */
 async function findOrCreateGoogleUser(
   googleId: string,
   email: string,
   name: string | null,
   avatarUrl: string | null,
   tokens: { refresh_token?: string | null },
-): Promise<typeof users.$inferSelect> {
-  let [user] = await db.select().from(users).where(eq(users.googleId, googleId));
+  intent: string = 'login',
+): Promise<typeof users.$inferSelect | null> {
+  // Wrap in a transaction to prevent race conditions on concurrent OAuth callbacks
+  return await db.transaction(async (tx) => {
+    let [user] = await tx.select().from(users).where(eq(users.googleId, googleId));
 
-  if (!user) {
-    [user] = await db.select().from(users).where(eq(users.email, email));
+    if (!user) {
+      [user] = await tx.select().from(users).where(eq(users.email, email));
 
-    if (user) {
-      // Link Google account to existing user
-      await db
-        .update(users)
-        .set({
-          googleId,
-          emailVerified: true,
-          avatarUrl: avatarUrl || user.avatarUrl,
-          googleRefreshToken: tokens.refresh_token
-            ? encrypt(tokens.refresh_token)
-            : user.googleRefreshToken,
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(users.id, user.id));
-      // Invalidate existing sessions on account linking
-      await db.delete(sessions).where(eq(sessions.userId, user.id));
-      [user] = await db.select().from(users).where(eq(users.id, user.id));
+      if (user) {
+        // Link Google account to existing user (allowed for both login and signup)
+        await tx
+          .update(users)
+          .set({
+            googleId,
+            emailVerified: true,
+            avatarUrl: avatarUrl || user.avatarUrl,
+            googleRefreshToken: tokens.refresh_token
+              ? encrypt(tokens.refresh_token)
+              : user.googleRefreshToken,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(users.id, user.id));
+        // Invalidate existing sessions on account linking
+        await tx.delete(sessions).where(eq(sessions.userId, user.id));
+        [user] = await tx.select().from(users).where(eq(users.id, user.id));
+      } else if (intent === 'signup') {
+        // New account creation — only allowed via signup flow where GDPR
+        // consent checkbox was checked before initiating OAuth.
+        [user] = await tx
+          .insert(users)
+          .values({
+            email,
+            emailVerified: true,
+            name,
+            avatarUrl,
+            googleId,
+            googleRefreshToken: tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
+            plan: 'pro',
+            planPeriodEnd: getTrialEndDate(),
+            gdprConsentAt: new Date().toISOString(),
+            consentVersion: GDPR_CONSENT_VERSION,
+          })
+          .returning();
+      } else {
+        // Login intent but no existing account — caller should redirect to signup
+        return null;
+      }
     } else {
-      // GDPR consent deferred to onboarding
-      [user] = await db
-        .insert(users)
-        .values({
-          email,
-          emailVerified: true,
-          name,
-          avatarUrl,
-          googleId,
-          googleRefreshToken: tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
-          plan: 'pro',
-          planPeriodEnd: getTrialEndDate(),
-          gdprConsentAt: null,
-          consentVersion: null,
-        })
-        .returning();
+      // Existing Google user — update refresh token if provided
+      if (tokens.refresh_token) {
+        await tx
+          .update(users)
+          .set({
+            googleRefreshToken: encrypt(tokens.refresh_token),
+            avatarUrl: avatarUrl || user.avatarUrl,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(users.id, user.id));
+      }
     }
-  } else {
-    // Existing Google user — update refresh token if provided
-    if (tokens.refresh_token) {
-      await db
-        .update(users)
-        .set({
-          googleRefreshToken: encrypt(tokens.refresh_token),
-          avatarUrl: avatarUrl || user.avatarUrl,
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(users.id, user.id));
-    }
-  }
 
-  // Re-fetch user to get latest state
-  [user] = await db.select().from(users).where(eq(users.id, user.id));
-  return user;
+    // Re-fetch user to get latest state
+    [user] = await tx.select().from(users).where(eq(users.id, user.id));
+    return user;
+  });
 }
 
 // GET /api/auth/google/callback — handle OAuth callback
@@ -887,13 +931,15 @@ router.get(
           gt(oauthStates.expiresAt, new Date().toISOString()),
         ),
       )
-      .returning({ stateHash: oauthStates.stateHash });
+      .returning({ stateHash: oauthStates.stateHash, intent: oauthStates.intent });
 
     if (stateRows.length === 0) {
       log.warn('OAuth callback: invalid or expired state');
       res.redirect(`${frontendOrigin}/login?error=auth_failed`);
       return;
     }
+
+    const oauthIntent = stateRows[0].intent || 'login';
 
     try {
       const oauth2Client = createOAuth2Client();
@@ -916,11 +962,12 @@ router.get(
         profile.name || null,
         profile.picture || null,
         tokens,
+        oauthIntent,
       );
 
-      // Safety net: if user still has no refresh token, re-auth with consent to get one
-      if (!user.googleRefreshToken) {
-        res.redirect(`${frontendOrigin}/login?google_consent=1`);
+      if (!user) {
+        // Login intent but no existing account — redirect to signup
+        res.redirect(`${frontendOrigin}/signup?error=no_account`);
         return;
       }
 
@@ -931,15 +978,16 @@ router.get(
       );
       setAuthCookies(res, accessToken, refreshToken);
 
-      // Only start scheduler if user has consented to GDPR
-      if (user.gdprConsentAt) {
+      // Only start scheduler after onboarding is complete — during onboarding
+      // the user is still configuring calendars/hours, no point scheduling yet
+      if (user.onboardingCompleted) {
         schedulerRegistry.getOrCreate(user.id).catch((err) => {
           log.error({ err }, 'Failed to start scheduler after Google OAuth');
         });
       }
 
       if (!user.onboardingCompleted) {
-        res.redirect(`${frontendOrigin}/onboarding?step=2`);
+        res.redirect(`${frontendOrigin}/onboarding`);
       } else {
         res.redirect(`${frontendOrigin}/?google=connected`);
       }
@@ -1016,9 +1064,10 @@ router.post(
     if (user.googleRefreshToken) {
       try {
         const refreshToken = decrypt(user.googleRefreshToken);
-        const oauth2Client = createOAuth2Client();
-        oauth2Client.setCredentials({ refresh_token: refreshToken });
-        await oauth2Client.revokeCredentials();
+        await fetch(
+          `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(refreshToken)}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
+        );
       } catch (err) {
         log.error({ err }, 'Failed to revoke Google token during consent withdrawal');
       }
@@ -1068,7 +1117,6 @@ const exportRequestSchema = z.object({
         'tasks',
         'meetings',
         'focus',
-        'buffers',
         'calendars',
         'calendarEvents',
         'scheduledEvents',
@@ -1170,6 +1218,17 @@ router.delete(
       }
     }
 
+    // Hard constraint: if user signed in via Google, we MUST have a refresh token
+    // to properly deauthorize the app on Google's side during deletion
+    if (user.googleId && !user.googleRefreshToken) {
+      sendError(
+        res,
+        400,
+        'Please re-connect your Google account in Settings before deleting. This is required to fully remove Fluxure from your Google account.',
+      );
+      return;
+    }
+
     // Clean up Google Calendar events before deleting the account
     if (user.googleRefreshToken) {
       try {
@@ -1210,19 +1269,26 @@ router.delete(
           }
         }
 
-        // Best-effort: don't block deletion on individual event failures
-        for (const event of events) {
-          if (!event.googleEventId || !event.calendarId) continue;
-          const googleCalendarId = calendarIdMap.get(event.calendarId);
-          if (!googleCalendarId) continue;
-          try {
-            await calendarClient.deleteEvent(googleCalendarId, event.googleEventId);
-          } catch (err) {
-            log.warn(
-              { googleEventId: event.googleEventId, err },
-              'Failed to delete managed event from Google Calendar during account deletion',
-            );
-          }
+        // Best-effort concurrent deletes — grouped by Google calendar ID
+        const CONCURRENT_DELETES = 6;
+        const deletableEvents = events.filter(
+          (e) => e.googleEventId && e.calendarId && calendarIdMap.has(e.calendarId),
+        );
+        for (let i = 0; i < deletableEvents.length; i += CONCURRENT_DELETES) {
+          const batch = deletableEvents.slice(i, i + CONCURRENT_DELETES);
+          await Promise.allSettled(
+            batch.map(async (event) => {
+              const googleCalendarId = calendarIdMap.get(event.calendarId!)!;
+              try {
+                await calendarClient.deleteEvent(googleCalendarId, event.googleEventId!);
+              } catch (err) {
+                log.warn(
+                  { googleEventId: event.googleEventId, err },
+                  'Failed to delete managed event from Google Calendar during account deletion',
+                );
+              }
+            }),
+          );
         }
       } catch (err) {
         log.error({ err }, 'Failed to delete Google Calendar events during account deletion');
@@ -1230,16 +1296,27 @@ router.delete(
       }
     }
 
+    // Revoke Google app access — removes Fluxure from user's "Third-party apps" in Google
     if (user.googleRefreshToken) {
       try {
         const refreshToken = decrypt(user.googleRefreshToken);
-        const oauth2Client = createOAuth2Client();
-        oauth2Client.setCredentials({ refresh_token: refreshToken });
-        await oauth2Client.revokeCredentials();
+        // Direct revocation call to Google's endpoint — this removes the app grant entirely
+        const revokeRes = await fetch(
+          `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(refreshToken)}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
+        );
+        if (!revokeRes.ok) {
+          log.warn({ status: revokeRes.status }, 'Google token revocation returned non-200');
+        }
       } catch (err) {
         log.error({ err }, 'Failed to revoke Google token during account deletion');
         // Continue with deletion even if revocation fails
       }
+    } else if (user.googleId) {
+      log.warn(
+        { googleId: user.googleId },
+        'Account deleted with googleId but no refresh token — cannot revoke Google app access',
+      );
     }
 
     try {
@@ -1253,6 +1330,11 @@ router.delete(
 
     const deletedEmail = user.email;
     const deletedAt = new Date().toISOString();
+
+    // Cancel any pending auto-complete jobs before deleting user
+    cancelAllForUser(userId).catch((err) =>
+      log.warn({ err }, 'Failed to cancel auto-complete jobs during account deletion'),
+    );
 
     // ON DELETE CASCADE handles all domain data
     await db.delete(users).where(eq(users.id, userId));
@@ -1345,7 +1427,7 @@ router.delete(
     }
 
     // Delete before responding to avoid race condition
-    await db.delete(sessions).where(eq(sessions.id, sessionId));
+    await db.delete(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId)));
 
     if (isCurrentSession) {
       res.json({

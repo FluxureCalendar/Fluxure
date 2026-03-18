@@ -143,17 +143,33 @@ router.get(
       }
     }
 
-    // Habit completion rate: actual completions / enabled habits count
-    const enabledHabitsCount = allHabits.filter((h) => h.enabled).length;
-    const completionsInRange = enabledHabitsCount > 0 ? allCompletions : [];
-    // Calculate the number of days in the range
-    const rangeDays = Math.max(
-      1,
-      Math.ceil(
-        (new Date(toDate).getTime() - new Date(fromDate).getTime()) / (24 * 60 * 60 * 1000),
-      ),
-    );
-    const expectedCompletions = enabledHabitsCount * rangeDays;
+    // Habit completion rate: actual completions / expected completions.
+    // Each habit is only expected on its scheduled days (e.g., MWF = 3 per week),
+    // so we count matching days per habit across the range instead of naively
+    // multiplying enabledHabitsCount * totalDays.
+    const enabledHabits = allHabits.filter((h) => h.enabled);
+    const completionsInRange = enabledHabits.length > 0 ? allCompletions : [];
+    const DAY_ABBREV_TO_JS: Record<string, number> = {
+      sun: 0,
+      mon: 1,
+      tue: 2,
+      wed: 3,
+      thu: 4,
+      fri: 5,
+      sat: 6,
+    };
+    let expectedCompletions = 0;
+    for (const habit of enabledHabits) {
+      const scheduledJsDays = new Set(
+        (habit.days as string[]).map((d) => DAY_ABBREV_TO_JS[d]).filter((n) => n !== undefined),
+      );
+      const cursor = new Date(fromDate);
+      const end = new Date(toDate);
+      while (cursor < end) {
+        if (scheduledJsDays.has(cursor.getUTCDay())) expectedCompletions++;
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+      }
+    }
     const habitCompletionRate =
       expectedCompletions > 0 ? completionsInRange.length / expectedCompletions : 0;
 

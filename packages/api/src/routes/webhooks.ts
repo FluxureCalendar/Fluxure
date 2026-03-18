@@ -16,14 +16,15 @@ function hashWebhookToken(token: string): string {
 }
 
 /**
- * Constant-time string comparison that hashes both inputs with SHA-256 first,
- * ensuring equal-length buffers regardless of input lengths. This prevents
- * timing oracles from the length check that timingSafeEqual requires.
+ * Constant-time comparison of two hex-encoded SHA-256 hashes.
+ * Both inputs are already fixed-length (64 hex chars), so we can
+ * compare directly without re-hashing.
  */
-function safeEqual(a: string, b: string): boolean {
-  const hashA = createHash('sha256').update(a).digest();
-  const hashB = createHash('sha256').update(b).digest();
-  return timingSafeEqual(hashA, hashB);
+function safeEqualHex(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'hex');
+  const bufB = Buffer.from(b, 'hex');
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
 }
 
 const router = Router();
@@ -71,7 +72,7 @@ router.post('/google-calendar', (req, res) => {
 
       // Constant-time token verification against stored hash
       const incomingTokenHash = token ? hashWebhookToken(token) : '';
-      if (!cal.watchToken || !token || !safeEqual(cal.watchToken, incomingTokenHash)) {
+      if (!cal.watchToken || !token || !safeEqualHex(cal.watchToken, incomingTokenHash)) {
         log.warn({ channelId }, 'Token mismatch');
         return;
       }
@@ -90,7 +91,7 @@ router.post('/google-calendar', (req, res) => {
           await queue.add(
             'reschedule',
             { userId: cal.userId, reason: 'Webhook: calendar change' },
-            { jobId: `reschedule:${cal.userId}` },
+            { jobId: `reschedule-${cal.userId}` },
           );
           log.info({ userId: cal.userId }, 'Webhook routed to reschedule queue (not owner)');
           return;
