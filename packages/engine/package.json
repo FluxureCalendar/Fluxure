@@ -1,6 +1,6 @@
 {
   "name": "@fluxure/engine",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "description": "Pure scheduling algorithm — greedy slot placement with quality scoring for Fluxure",
   "license": "AGPL-3.0-only",
   "author": {
