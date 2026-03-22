@@ -3,6 +3,7 @@ import type { PlanType } from '@fluxure/shared';
 import type { Logger } from 'pino';
 import { verifyAccessToken, getAccessTokenCookieName } from '../auth/jwt.js';
 import { GDPR_CONSENT_VERSION } from '@fluxure/shared';
+import { isSelfHosted } from '../config.js';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -30,7 +31,7 @@ export function optionalAuth(req: Request, res: Response, next: NextFunction): v
       if (payload.emailVerified) {
         req.userId = payload.userId;
         req.userEmail = payload.email;
-        req.userPlan = payload.plan;
+        req.userPlan = isSelfHosted() ? 'pro' : payload.plan;
       }
     } catch {
       // Invalid token — proceed as unauthenticated
@@ -90,7 +91,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
     req.userId = payload.userId;
     req.userEmail = payload.email;
-    req.userPlan = payload.plan;
+    req.userPlan = isSelfHosted() ? 'pro' : payload.plan;
     next();
   } catch {
     res.status(401).json({ error: 'Invalid or expired token' });

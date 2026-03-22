@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, and, gte, lte, desc, inArray } from 'drizzle-orm';
+import { eq, and, gte, lte, lt, desc, inArray } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import { db } from '../db/pg-index.js';
 import {
@@ -10,7 +10,6 @@ import {
   tasks,
   smartMeetings,
   focusTimeRules,
-  bufferConfig,
   scheduleChanges,
 } from '../db/pg-schema.js';
 import { reschedule, generateCandidateSlots, scoreSlot, buildTimeline } from '@fluxure/engine';
@@ -22,12 +21,11 @@ import type {
   TimeSlot,
 } from '@fluxure/shared';
 import {
-  DecompressionTarget,
   EventStatus,
   ItemType,
   CalendarOpType,
   BRAND,
-  DEFAULT_BUFFER_CONFIG,
+  DEFAULT_BREAK_BETWEEN_MINUTES,
   RATE_LIMIT as RATE_LIMIT_CONST,
   QUALITY_CACHE_TTL_S,
   MS_PER_DAY,
@@ -35,17 +33,19 @@ import {
   nextDayInTz,
   toDateStr,
   getPlanLimits,
+  DEFAULT_TIMEZONE,
 } from '@fluxure/shared';
 import rateLimit from 'express-rate-limit';
 import { createStore } from '../rate-limiters.js';
 import { broadcastToUser } from '../ws.js';
 import { scheduleChangesQuerySchema } from '../validation.js';
 import { schedulerRegistry } from '../scheduler-registry.js';
+import { triggerReschedule } from '../polling-ref.js';
 import { sendNotFound, sendError, UUID_REGEX } from './helpers.js';
 import { sendFeatureGated } from '../middleware/plan-gate.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { cacheHashGet, cacheHashSet, cacheHashDelAll } from '../cache/redis.js';
-import { toHabit, toTask, toMeeting, toFocusRule, toBufConfig } from '../utils/converters.js';
+import { toHabit, toTask, toMeeting, toFocusRule } from '../utils/converters.js';
 import { createLogger } from '../logger.js';
 import { withDistributedLock, LockNotAcquiredError } from '../distributed/lock.js';
 import { registerScheduleActions } from './schedule-actions.js';
@@ -85,15 +85,6 @@ export async function invalidateQualityCache(userId: string): Promise<void> {
 const qualityRangeSchema = z.object({
   start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD'),
   end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD'),
-});
-
-const exportLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 5,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { error: 'Too many export requests.' },
-  store: createStore('schedule-export'),
 });
 
 const router = Router();
@@ -198,7 +189,7 @@ router.get(
       .filter((row) => row.start && row.end)
       .map((row) => ({
         ...row,
-        calendarId: row.calendarId || 'primary',
+        calendarId: row.calendarId || null,
       }));
 
     const externalAll = allExternal
@@ -236,28 +227,23 @@ router.get(
 
 /** Run a local-only reschedule (no Google Calendar sync). */
 async function runLocalReschedule(userId: string) {
-  const [allHabitsRaw, allTasksRaw, allMeetingsRaw, allFocusRulesRaw, bufRows] = await Promise.all([
+  const [allHabitsRaw, allTasksRaw, allMeetingsRaw, allFocusRulesRaw] = await Promise.all([
     db.select().from(habits).where(eq(habits.userId, userId)),
     db.select().from(tasks).where(eq(tasks.userId, userId)),
     db.select().from(smartMeetings).where(eq(smartMeetings.userId, userId)),
     db.select().from(focusTimeRules).where(eq(focusTimeRules.userId, userId)),
-    db.select().from(bufferConfig).where(eq(bufferConfig.userId, userId)),
   ]);
 
   const allHabits = allHabitsRaw.map(toHabit);
   const allTasks = allTasksRaw.map(toTask);
   const allMeetings = allMeetingsRaw.map(toMeeting);
   const allFocusRules = allFocusRulesRaw.map(toFocusRule);
-  const buf =
-    bufRows.length > 0
-      ? toBufConfig(bufRows[0])
-      : {
-          id: 'default',
-          ...DEFAULT_BUFFER_CONFIG,
-          applyDecompressionTo: DecompressionTarget.All,
-        };
 
   const userSettings = await getUserSettings(userId);
+  const buf: BufferConfig = {
+    breakBetweenItemsMinutes:
+      userSettings.breakBetweenItemsMinutes ?? DEFAULT_BREAK_BETWEEN_MINUTES,
+  };
 
   const nowISO = new Date().toISOString();
   const scheduledRows = await db
@@ -275,6 +261,11 @@ async function runLocalReschedule(userId: string) {
     itemType: row.itemType as ItemType,
     itemId: row.itemId,
     status: (row.status || 'free') as EventStatus,
+    location: null,
+    description: null,
+    calendarId: row.calendarId ?? null,
+    lastModifiedByUs: null,
+    googleUpdatedAt: null,
   }));
 
   const result = reschedule(
@@ -315,15 +306,17 @@ async function applyOperationsLocally(
   const now = new Date().toISOString();
 
   // Pre-categorize operations by type for batching
+  type ItemTypeEnum = 'habit' | 'task' | 'meeting' | 'focus' | 'external';
+  type EventStatusEnum = 'free' | 'busy' | 'locked' | 'completed';
   const insertValues: Array<{
     userId: string;
-    itemType: string;
+    itemType: ItemTypeEnum;
     itemId: string;
     title: string;
     googleEventId: null;
     start: string;
     end: string;
-    status: string;
+    status: EventStatusEnum;
     alternativeSlotsCount: null;
     createdAt: string;
     updatedAt: string;
@@ -341,7 +334,7 @@ async function applyOperationsLocally(
         googleEventId: null,
         start: op.start,
         end: op.end,
-        status: op.status,
+        status: op.status as EventStatusEnum,
         alternativeSlotsCount: null,
         createdAt: now,
         updatedAt: now,
@@ -367,7 +360,7 @@ async function applyOperationsLocally(
               title: op.title,
               start: op.start,
               end: op.end,
-              status: op.status,
+              status: op.status as EventStatusEnum,
               updatedAt: now,
             })
             .where(and(eq(scheduledEvents.id, op.eventId!), eq(scheduledEvents.userId, userId))),
@@ -439,162 +432,6 @@ router.post(
   }),
 );
 
-// GET /api/schedule/export — ICS calendar export (streamed)
-router.get(
-  '/export',
-  exportLimiter,
-  asyncHandler(async (req, res) => {
-    try {
-      const userId = req.userId;
-      const startParam = req.query.start as string | undefined;
-      const endParam = req.query.end as string | undefined;
-
-      let startFilter: number;
-      let endFilter: number;
-
-      if (startParam) {
-        if (!ISO_DATE_RE.test(startParam)) {
-          sendError(res, 400, 'Invalid start date — use ISO 8601 format');
-          return;
-        }
-        const parsed = new Date(startParam).getTime();
-        if (isNaN(parsed)) {
-          sendError(res, 400, 'Invalid start date');
-          return;
-        }
-        startFilter = parsed;
-      } else {
-        // Default to today
-        startFilter = Date.now();
-      }
-      if (endParam) {
-        if (!ISO_DATE_RE.test(endParam)) {
-          sendError(res, 400, 'Invalid end date — use ISO 8601 format');
-          return;
-        }
-        const parsed = new Date(endParam).getTime();
-        if (isNaN(parsed)) {
-          sendError(res, 400, 'Invalid end date');
-          return;
-        }
-        endFilter = parsed;
-      } else {
-        // Default to 90 days from start
-        endFilter = startFilter + MAX_SCHEDULE_RANGE_DAYS * MS_PER_DAY;
-      }
-
-      if (startFilter >= endFilter) {
-        sendError(res, 400, 'start must be before end');
-        return;
-      }
-
-      const MAX_EXPORT_RANGE_MS = 365 * 24 * 60 * 60 * 1000; // 1 year max
-      if (endFilter - startFilter > MAX_EXPORT_RANGE_MS) {
-        sendError(res, 400, 'Export range cannot exceed 365 days');
-        return;
-      }
-
-      function toICSDate(isoStr: string): string {
-        const d = new Date(isoStr);
-        return d
-          .toISOString()
-          .replace(/[-:]/g, '')
-          .replace(/\.\d{3}/, '');
-      }
-
-      function escapeIcsValue(value: string): string {
-        return value
-          .replace(/\\/g, '\\\\')
-          .replace(/;/g, '\\;')
-          .replace(/,/g, '\\,')
-          .replace(/\n/g, '\\n')
-          .replace(/\r/g, '');
-      }
-
-      res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-      res.setHeader('Content-Disposition', 'attachment; filename="fluxure-schedule.ics"');
-      res.setHeader('Transfer-Encoding', 'chunked');
-
-      res.write('BEGIN:VCALENDAR\r\n');
-      res.write('VERSION:2.0\r\n');
-      res.write(`PRODID:-//${escapeIcsValue(BRAND.name)}//EN\r\n`);
-      res.write('CALSCALE:GREGORIAN\r\n');
-
-      const managedWhere = and(
-        eq(scheduledEvents.userId, userId),
-        gte(scheduledEvents.end, new Date(startFilter).toISOString()),
-        lte(scheduledEvents.start, new Date(endFilter).toISOString()),
-      );
-
-      const externalWhere = and(
-        eq(calendarEvents.userId, userId),
-        gte(calendarEvents.end, new Date(startFilter).toISOString()),
-        lte(calendarEvents.start, new Date(endFilter).toISOString()),
-      );
-
-      const CHUNK_SIZE = 500;
-      let managedOffset = 0;
-      while (true) {
-        const chunk = await db
-          .select()
-          .from(scheduledEvents)
-          .where(managedWhere)
-          .limit(CHUNK_SIZE)
-          .offset(managedOffset);
-
-        for (const ev of chunk) {
-          res.write('BEGIN:VEVENT\r\n');
-          res.write(`DTSTART:${toICSDate(ev.start!)}\r\n`);
-          res.write(`DTEND:${toICSDate(ev.end!)}\r\n`);
-          res.write(`SUMMARY:${escapeIcsValue(ev.title || ev.itemType || 'Event')}\r\n`);
-          res.write(`DESCRIPTION:${escapeIcsValue(ev.itemType || '')}\r\n`);
-          res.write(`UID:${ev.id}@fluxure\r\n`);
-          res.write(`DTSTAMP:${toICSDate(ev.createdAt || new Date().toISOString())}\r\n`);
-          res.write('END:VEVENT\r\n');
-        }
-
-        if (chunk.length < CHUNK_SIZE) break;
-        managedOffset += CHUNK_SIZE;
-      }
-
-      let externalOffset = 0;
-      while (true) {
-        const chunk = await db
-          .select()
-          .from(calendarEvents)
-          .where(externalWhere)
-          .limit(CHUNK_SIZE)
-          .offset(externalOffset);
-
-        for (const ev of chunk) {
-          res.write('BEGIN:VEVENT\r\n');
-          res.write(`DTSTART:${toICSDate(ev.start)}\r\n`);
-          res.write(`DTEND:${toICSDate(ev.end)}\r\n`);
-          res.write(`SUMMARY:${escapeIcsValue(ev.title)}\r\n`);
-          res.write(`UID:${ev.id}@fluxure\r\n`);
-          res.write(`DTSTAMP:${toICSDate(ev.updatedAt || new Date().toISOString())}\r\n`);
-          if (ev.location) res.write(`LOCATION:${escapeIcsValue(ev.location)}\r\n`);
-          res.write('END:VEVENT\r\n');
-        }
-
-        if (chunk.length < CHUNK_SIZE) break;
-        externalOffset += CHUNK_SIZE;
-      }
-
-      res.write('END:VCALENDAR\r\n');
-      res.end();
-    } catch (error: unknown) {
-      log.error({ err: error }, 'ICS export error');
-      // If headers not yet sent, send error response; otherwise just destroy the stream
-      if (!res.headersSent) {
-        sendError(res, 500, 'Export failed');
-      } else {
-        res.destroy();
-      }
-    }
-  }),
-);
-
 // GET /api/schedule/changes — return recent schedule changes
 router.get(
   '/changes',
@@ -658,7 +495,7 @@ router.get(
       }
 
       const userSettings = await getUserSettings(userId);
-      const tz = userSettings.timezone || 'UTC';
+      const tz = userSettings.timezone || DEFAULT_TIMEZONE;
 
       const dateKey = toDateStr(targetDate, tz);
       const cached = await getCachedQuality(userId, dateKey);
@@ -755,7 +592,7 @@ router.get(
 
       const { allHabits, allTasks, allMeetings, allFocusRules, buf, userSettings } =
         await loadDomainObjectsForQuality(userId);
-      const tz = userSettings.timezone || 'UTC';
+      const tz = userSettings.timezone || DEFAULT_TIMEZONE;
 
       const rangeStart = startOfDayInTz(startDate, tz);
       const rangeEnd = nextDayInTz(endDate, tz);
@@ -900,9 +737,8 @@ router.get(
         return;
       }
 
-      const [userSettings, bufRows, allScheduled] = await Promise.all([
+      const [userSettings, allScheduled] = await Promise.all([
         getUserSettings(userId),
-        db.select().from(bufferConfig).where(eq(bufferConfig.userId, userId)),
         db
           .select({
             start: scheduledEvents.start,
@@ -918,16 +754,10 @@ router.get(
           ),
       ]);
 
-      const buf: BufferConfig =
-        bufRows.length > 0
-          ? toBufConfig(bufRows[0])
-          : {
-              id: 'default',
-              travelTimeMinutes: 15,
-              decompressionMinutes: 10,
-              breakBetweenItemsMinutes: 5,
-              applyDecompressionTo: DecompressionTarget.All,
-            };
+      const buf: BufferConfig = {
+        breakBetweenItemsMinutes:
+          userSettings.breakBetweenItemsMinutes ?? DEFAULT_BREAK_BETWEEN_MINUTES,
+      };
       const occupiedSlots: TimeSlot[] = allScheduled
         .filter((r): r is typeof r & { start: string; end: string } => !!r.start && !!r.end)
         .map((r) => ({
@@ -957,7 +787,7 @@ router.get(
       );
 
       const timeline = buildTimeline(now, windowEnd, userSettings);
-      const tz = userSettings.timezone || 'UTC';
+      const tz = userSettings.timezone || DEFAULT_TIMEZONE;
       const candidates = generateCandidateSlots(
         scheduleItem,
         timeline,
@@ -981,6 +811,47 @@ router.get(
       log.error({ err: error }, 'Alternatives error');
       sendError(res, 500, 'Failed to compute alternatives');
     }
+  }),
+);
+
+// POST /api/schedule/force-sync — clear sync tokens and force a full calendar resync
+const forceSyncLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000, // 24 hours
+  max: 10,
+  message: { error: 'Sync limit reached (10/day). Try again tomorrow.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: createStore('force-sync'),
+});
+
+router.post(
+  '/force-sync',
+  forceSyncLimiter,
+  asyncHandler(async (req, res) => {
+    const userId = req.userId;
+
+    // 1. Clear sync tokens for a full re-fetch
+    await db.update(calendars).set({ syncToken: null }).where(eq(calendars.userId, userId));
+
+    // 2. Wipe all cached external events
+    await db.delete(calendarEvents).where(eq(calendarEvents.userId, userId));
+
+    // 3. Re-fetch everything from Google — no timeout, wait for full completion
+    const scheduler = schedulerRegistry.get(userId);
+    if (scheduler) {
+      const manager = scheduler.getPollerManager();
+      if (manager) {
+        // Reset in-memory caches so pollers do a true full sync
+        // (DB sync tokens already cleared above, but pollers cache them in-memory)
+        manager.resetAllPollerCaches();
+        await manager.syncAllNowNoTimeout();
+      }
+    }
+
+    // 4. Reschedule with fresh data
+    triggerReschedule('Force sync', userId);
+
+    res.json({ message: 'Full sync completed' });
   }),
 );
 

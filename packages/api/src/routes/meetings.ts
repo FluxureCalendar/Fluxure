@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { eq, and, count } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
-import { smartMeetings, calendars } from '../db/pg-schema.js';
+import { smartMeetings } from '../db/pg-schema.js';
 import type { CreateMeetingRequest, SmartMeeting } from '@fluxure/shared';
 import { getPlanLimits } from '@fluxure/shared';
 import { toMeeting } from '../utils/converters.js';
-import { checkEntityLimit, sendPlanLimitError } from '../middleware/plan-gate.js';
+import { checkEntityLimit, sendPlanLimitError, sendFeatureGated } from '../middleware/plan-gate.js';
 import { createMeetingSchema, updateMeetingSchema, paginationSchema } from '../validation.js';
 import { logActivity } from './activity.js';
 import { broadcastToUser } from '../ws.js';
@@ -13,6 +13,7 @@ import { triggerReschedule } from '../polling-ref.js';
 import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { createLogger } from '../logger.js';
+import { buildUpdates, validateCalendarOwnership } from '../utils/route-helpers.js';
 
 const log = createLogger('meetings');
 
@@ -22,6 +23,11 @@ const router = Router();
 router.get(
   '/',
   asyncHandler(async (req, res) => {
+    const limits = getPlanLimits(req.userPlan);
+    if (!limits.meetingsEnabled) {
+      sendFeatureGated(res, 'meetings');
+      return;
+    }
     const parsed = paginationSchema.safeParse(req.query);
     if (!parsed.success) {
       sendError(res, 400, 'Invalid pagination parameters');
@@ -62,6 +68,11 @@ router.get(
 router.get(
   '/:id',
   asyncHandler(async (req, res) => {
+    const limits = getPlanLimits(req.userPlan);
+    if (!limits.meetingsEnabled) {
+      sendFeatureGated(res, 'meetings');
+      return;
+    }
     const { id } = req.params;
     if (!validateUUID(id, res)) return;
     const rows = await db
@@ -80,6 +91,11 @@ router.get(
 router.post(
   '/',
   asyncHandler(async (req, res) => {
+    const limits = getPlanLimits(req.userPlan);
+    if (!limits.meetingsEnabled) {
+      sendFeatureGated(res, 'meetings');
+      return;
+    }
     const parsed = createMeetingSchema.safeParse(req.body);
     if (!parsed.success) {
       sendValidationError(res, parsed.error);
@@ -87,7 +103,6 @@ router.post(
     }
     const body = parsed.data as CreateMeetingRequest;
 
-    const limits = getPlanLimits(req.userPlan);
     const [{ count: meetingCount }] = await db
       .select({ count: count() })
       .from(smartMeetings)
@@ -99,11 +114,7 @@ router.post(
 
     // Validate calendarId belongs to the authenticated user
     if (body.calendarId) {
-      const [cal] = await db
-        .select({ id: calendars.id })
-        .from(calendars)
-        .where(and(eq(calendars.id, body.calendarId), eq(calendars.userId, req.userId)));
-      if (!cal) {
+      if (!(await validateCalendarOwnership(body.calendarId, req.userId))) {
         sendError(res, 400, 'Invalid calendar ID');
         return;
       }
@@ -141,6 +152,11 @@ router.post(
 router.put(
   '/:id',
   asyncHandler(async (req, res) => {
+    const limits = getPlanLimits(req.userPlan);
+    if (!limits.meetingsEnabled) {
+      sendFeatureGated(res, 'meetings');
+      return;
+    }
     const { id } = req.params;
     if (!validateUUID(id, res)) return;
 
@@ -154,31 +170,31 @@ router.put(
 
     // Validate calendarId belongs to the authenticated user
     if (body.calendarId) {
-      const [cal] = await db
-        .select({ id: calendars.id })
-        .from(calendars)
-        .where(and(eq(calendars.id, body.calendarId), eq(calendars.userId, req.userId)));
-      if (!cal) {
+      if (!(await validateCalendarOwnership(body.calendarId, req.userId))) {
         sendError(res, 400, 'Invalid calendar ID');
         return;
       }
     }
 
-    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
-
-    if (body.name !== undefined) updates.name = body.name;
-    if (body.priority !== undefined) updates.priority = body.priority;
-    if (body.attendees !== undefined) updates.attendees = body.attendees;
-    if (body.duration !== undefined) updates.duration = body.duration;
-    if (body.frequency !== undefined) updates.frequency = body.frequency;
-    if (body.idealTime !== undefined) updates.idealTime = body.idealTime;
-    if (body.windowStart !== undefined) updates.windowStart = body.windowStart;
-    if (body.windowEnd !== undefined) updates.windowEnd = body.windowEnd;
-    if (body.location !== undefined) updates.location = body.location;
-    if (body.conferenceType !== undefined) updates.conferenceType = body.conferenceType;
-    if (body.skipBuffer !== undefined) updates.skipBuffer = body.skipBuffer;
-    if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
-    if (body.color !== undefined) updates.color = body.color;
+    const updates: Record<string, unknown> = {
+      ...buildUpdates(body, [
+        'name',
+        'priority',
+        'attendees',
+        'duration',
+        'frequency',
+        'idealTime',
+        'windowStart',
+        'windowEnd',
+        'location',
+        'conferenceType',
+        'skipBuffer',
+        'calendarId',
+        'color',
+        'enabled',
+      ] as const),
+      updatedAt: new Date().toISOString(),
+    };
 
     const updated = await db
       .update(smartMeetings)
@@ -202,6 +218,11 @@ router.put(
 router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
+    const limits = getPlanLimits(req.userPlan);
+    if (!limits.meetingsEnabled) {
+      sendFeatureGated(res, 'meetings');
+      return;
+    }
     const { id } = req.params;
     if (!validateUUID(id, res)) return;
     const existing = await db

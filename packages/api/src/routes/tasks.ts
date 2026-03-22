@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { eq, and, asc, sql, count } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
-import { tasks, subtasks, calendars } from '../db/pg-schema.js';
+import { tasks, subtasks } from '../db/pg-schema.js';
 import type { CreateTaskRequest, Task, Subtask } from '@fluxure/shared';
 import { getPlanLimits } from '@fluxure/shared';
 import { toTask } from '../utils/converters.js';
@@ -20,6 +20,7 @@ import { triggerReschedule } from '../polling-ref.js';
 import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { createLogger } from '../logger.js';
+import { buildUpdates, validateCalendarOwnership } from '../utils/route-helpers.js';
 
 const log = createLogger('tasks');
 
@@ -88,11 +89,7 @@ router.post(
     }
 
     if (body.calendarId) {
-      const [cal] = await db
-        .select({ id: calendars.id })
-        .from(calendars)
-        .where(and(eq(calendars.id, body.calendarId), eq(calendars.userId, req.userId)));
-      if (!cal) {
+      if (!(await validateCalendarOwnership(body.calendarId, req.userId))) {
         sendError(res, 400, 'Invalid calendar ID');
         return;
       }
@@ -110,8 +107,8 @@ router.post(
       earliestStart: body.earliestStart ?? now,
       chunkMin: body.chunkMin ?? 15,
       chunkMax: body.chunkMax ?? 120,
-      schedulingHours: body.schedulingHours ?? 'working',
-      status: 'open',
+      schedulingHours: body.schedulingHours ?? ('working' as const),
+      status: 'open' as const,
       isUpNext: false,
       skipBuffer: body.skipBuffer ?? false,
       calendarId: body.calendarId ?? null,
@@ -144,34 +141,55 @@ router.put(
 
     const body = parsed.data;
 
+    // Cross-field validation: merge partial update with existing values
+    const existingTask = await db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.id, id), eq(tasks.userId, req.userId)));
+    if (existingTask.length === 0) {
+      sendNotFound(res, 'Task');
+      return;
+    }
+    const mergedChunkMin = body.chunkMin ?? existingTask[0].chunkMin;
+    const mergedChunkMax = body.chunkMax ?? existingTask[0].chunkMax;
+    if (
+      mergedChunkMin !== undefined &&
+      mergedChunkMin !== null &&
+      mergedChunkMax !== undefined &&
+      mergedChunkMax !== null &&
+      mergedChunkMin > mergedChunkMax
+    ) {
+      sendError(res, 400, 'chunkMin must be <= chunkMax');
+      return;
+    }
+
     if (body.calendarId) {
-      const [cal] = await db
-        .select({ id: calendars.id })
-        .from(calendars)
-        .where(and(eq(calendars.id, body.calendarId), eq(calendars.userId, req.userId)));
-      if (!cal) {
+      if (!(await validateCalendarOwnership(body.calendarId, req.userId))) {
         sendError(res, 400, 'Invalid calendar ID');
         return;
       }
     }
 
-    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
-
-    if (body.name !== undefined) updates.name = body.name;
-    if (body.priority !== undefined) updates.priority = body.priority;
-    if (body.totalDuration !== undefined) updates.totalDuration = body.totalDuration;
-    if (body.remainingDuration !== undefined) updates.remainingDuration = body.remainingDuration;
-    if (body.dueDate !== undefined) updates.dueDate = body.dueDate;
-    if (body.earliestStart !== undefined) updates.earliestStart = body.earliestStart;
-    if (body.chunkMin !== undefined) updates.chunkMin = body.chunkMin;
-    if (body.chunkMax !== undefined) updates.chunkMax = body.chunkMax;
-    if (body.schedulingHours !== undefined) updates.schedulingHours = body.schedulingHours;
-    if (body.status !== undefined) updates.status = body.status;
-    if (body.isUpNext !== undefined) updates.isUpNext = body.isUpNext;
-    if (body.skipBuffer !== undefined) updates.skipBuffer = body.skipBuffer;
-    if (body.enabled !== undefined) updates.enabled = body.enabled;
-    if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
-    if (body.color !== undefined) updates.color = body.color;
+    const updates: Record<string, unknown> = {
+      ...buildUpdates(body, [
+        'name',
+        'priority',
+        'totalDuration',
+        'remainingDuration',
+        'dueDate',
+        'earliestStart',
+        'chunkMin',
+        'chunkMax',
+        'schedulingHours',
+        'status',
+        'isUpNext',
+        'skipBuffer',
+        'enabled',
+        'calendarId',
+        'color',
+      ] as const),
+      updatedAt: new Date().toISOString(),
+    };
 
     const updated = await db
       .update(tasks)

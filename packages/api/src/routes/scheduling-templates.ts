@@ -46,15 +46,24 @@ router.post(
       return;
     }
 
-    const inserted = await db
-      .insert(schedulingTemplates)
-      .values({
-        userId: req.userId,
-        name,
-        startTime,
-        endTime,
-      })
-      .returning();
+    let inserted;
+    try {
+      inserted = await db
+        .insert(schedulingTemplates)
+        .values({
+          userId: req.userId,
+          name,
+          startTime,
+          endTime,
+        })
+        .returning();
+    } catch (err: unknown) {
+      if (err instanceof Error && 'code' in err && (err as { code: unknown }).code === '23505') {
+        sendError(res, 409, 'A template with that name already exists');
+        return;
+      }
+      throw err;
+    }
 
     res.status(201).json({ template: inserted[0] });
   }),

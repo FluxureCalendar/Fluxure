@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'crypto';
 import { eq, and, gte } from 'drizzle-orm';
+import { SYNC_LOOKBACK_MS } from '@fluxure/shared';
 import { db } from '../db/pg-index.js';
 import { calendars, calendarEvents, scheduledEvents } from '../db/pg-schema.js';
 import { GoogleCalendarClient } from './calendar.js';
@@ -82,10 +83,16 @@ export class CalendarPollerManager {
       // Events with Fluxure extended props that don't exist in our scheduledEvents
       // table are from another instance and should be treated as external.
       const now = new Date().toISOString();
+      // Use the same lookback window as syncEvents (SYNC_LOOKBACK_MS) so that
+      // past managed events (e.g. habits from earlier today/this week) are
+      // recognised and not re-imported as external duplicates on restart.
+      const lookbackCutoff = new Date(Date.now() - SYNC_LOOKBACK_MS).toISOString();
       const localScheduled = await db
         .select({ googleEventId: scheduledEvents.googleEventId })
         .from(scheduledEvents)
-        .where(and(eq(scheduledEvents.userId, this.userId), gte(scheduledEvents.end, now)));
+        .where(
+          and(eq(scheduledEvents.userId, this.userId), gte(scheduledEvents.end, lookbackCutoff)),
+        );
       const localGoogleEventIds = new Set(
         localScheduled.map((r) => r.googleEventId).filter(Boolean),
       );
@@ -278,15 +285,31 @@ export class CalendarPollerManager {
 
   /** Force-sync all active pollers and await completion (with timeout). */
   async syncAllNow(): Promise<void> {
-    const SYNC_TIMEOUT_MS = 30_000;
+    const SYNC_TIMEOUT_MS = 60_000;
     const promises = Array.from(this.pollers.values()).map((p) => p.forcePoll());
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const timeout = new Promise<void>((resolve) => {
-      setTimeout(() => {
+      timer = setTimeout(() => {
         log.warn('syncAllNow timed out, proceeding with stale data');
         resolve();
       }, SYNC_TIMEOUT_MS);
     });
     await Promise.race([Promise.allSettled(promises).then(() => {}), timeout]);
+    if (timer) clearTimeout(timer);
+  }
+
+  /** Force-sync all pollers with no timeout — waits until every calendar is fully synced. */
+  async syncAllNowNoTimeout(): Promise<void> {
+    const promises = Array.from(this.pollers.values()).map((p) => p.forcePoll());
+    await Promise.allSettled(promises);
+  }
+
+  /** Reset all pollers' in-memory caches (sync token + change detection).
+   *  Call before syncAllNowNoTimeout() during a force sync to ensure a true full re-fetch. */
+  resetAllPollerCaches(): void {
+    for (const poller of this.pollers.values()) {
+      poller.resetCache();
+    }
   }
 
   /** Signal that we wrote to a specific calendar. */

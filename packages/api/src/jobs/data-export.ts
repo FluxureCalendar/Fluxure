@@ -1,5 +1,8 @@
 import archiver from 'archiver';
-import 'archiver-zip-encrypted';
+// @ts-expect-error — CJS package, no type declarations
+import ZipEncrypted from 'archiver-zip-encrypted';
+
+archiver.registerFormat('zip-encrypted', ZipEncrypted);
 import { randomBytes } from 'crypto';
 import { eq } from 'drizzle-orm';
 import { PassThrough } from 'stream';
@@ -11,7 +14,6 @@ import {
   subtasks,
   smartMeetings,
   focusTimeRules,
-  bufferConfig,
   calendars,
   scheduledEvents,
   calendarEvents,
@@ -32,7 +34,6 @@ export type ExportCategory =
   | 'tasks'
   | 'meetings'
   | 'focus'
-  | 'buffers'
   | 'calendars'
   | 'calendarEvents'
   | 'scheduledEvents'
@@ -48,7 +49,6 @@ export const EXPORT_CATEGORIES: readonly ExportCategory[] = [
   'tasks',
   'meetings',
   'focus',
-  'buffers',
   'calendars',
   'calendarEvents',
   'scheduledEvents',
@@ -123,9 +123,6 @@ function buildCategoryFetchers(): Record<ExportCategory, CategoryFetcher> {
     },
     focus: {
       fetch: (userId) => db.select().from(focusTimeRules).where(eq(focusTimeRules.userId, userId)),
-    },
-    buffers: {
-      fetch: (userId) => db.select().from(bufferConfig).where(eq(bufferConfig.userId, userId)),
     },
     calendars: {
       async fetch(userId: string) {
@@ -256,6 +253,8 @@ async function createEncryptedZip(jsonContent: string, password: string): Promis
   });
 }
 
+const DATA_EXPORT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 export async function processDataExport(
   userId: string,
   categories: readonly ExportCategory[],
@@ -263,20 +262,35 @@ export async function processDataExport(
   log.info({ userId, categories }, 'Starting data export');
 
   try {
-    // Look up email from DB to avoid storing PII in job payloads
-    const [user] = await db.select({ email: users.email }).from(users).where(eq(users.id, userId));
-    if (!user) {
-      log.error({ userId }, 'Data export failed: user not found');
-      return;
+    const result = await Promise.race([
+      (async () => {
+        // Look up email from DB to avoid storing PII in job payloads
+        const [user] = await db
+          .select({ email: users.email })
+          .from(users)
+          .where(eq(users.id, userId));
+        if (!user) {
+          log.error({ userId }, 'Data export failed: user not found');
+          return;
+        }
+
+        const exportData = await buildExportData(userId, categories);
+        const jsonContent = JSON.stringify(exportData, null, 2);
+        const zipPassword = randomBytes(16).toString('hex'); // 128 bits of entropy
+        const zipBuffer = await createEncryptedZip(jsonContent, zipPassword);
+
+        await sendDataExportEmail(user.email, zipBuffer, zipPassword);
+        log.info({ userId }, 'Data export email sent successfully');
+        return 'ok' as const;
+      })(),
+      new Promise<'timeout'>((resolve) =>
+        setTimeout(() => resolve('timeout'), DATA_EXPORT_TIMEOUT_MS),
+      ),
+    ]);
+
+    if (result === 'timeout') {
+      log.error({ userId }, 'Data export timed out after 5 minutes');
     }
-
-    const exportData = await buildExportData(userId, categories);
-    const jsonContent = JSON.stringify(exportData, null, 2);
-    const zipPassword = randomBytes(16).toString('hex'); // 128 bits of entropy
-    const zipBuffer = await createEncryptedZip(jsonContent, zipPassword);
-
-    await sendDataExportEmail(user.email, zipBuffer, zipPassword);
-    log.info({ userId }, 'Data export email sent successfully');
   } catch (err) {
     log.error({ userId, err }, 'Data export failed');
   }

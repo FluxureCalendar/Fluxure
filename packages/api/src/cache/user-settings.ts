@@ -4,6 +4,7 @@ import { users } from '../db/pg-schema.js';
 import type { UserSettings } from '@fluxure/shared';
 import { getPlanLimits, DEFAULT_SCHEDULING_WINDOW_DAYS } from '@fluxure/shared';
 import { cacheGet, cacheSet, cacheDel } from './redis.js';
+import { isSelfHosted } from '../config.js';
 import { DEFAULT_USER_SETTINGS } from '../routes/defaults.js';
 
 const SETTINGS_TTL_S = 60;
@@ -32,7 +33,7 @@ export async function getUserSettingsCached(userId: string): Promise<UserSetting
   const parsed: UserSettings = isValidSettings(settingsRaw) ? settingsRaw : DEFAULT_USER_SETTINGS;
 
   // Clamp scheduling window to plan limit
-  const limits = getPlanLimits(row?.plan ?? 'free');
+  const limits = getPlanLimits(isSelfHosted() ? 'pro' : (row?.plan ?? 'free'));
   const settings: UserSettings = {
     ...parsed,
     schedulingWindowDays: Math.min(

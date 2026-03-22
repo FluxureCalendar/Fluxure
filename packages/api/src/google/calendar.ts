@@ -12,7 +12,6 @@ import {
   NUKE_LOOKBACK_DAYS,
   NUKE_LOOKAHEAD_DAYS,
   GOOGLE_MAX_DELETE_RETRIES,
-  GOOGLE_INTER_DELETE_DELAY_MS,
   DEFAULT_WATCH_TTL_MS,
   MAX_SYNC_EVENTS,
   subDays,
@@ -50,6 +49,40 @@ export class GoogleCalendarClient {
 
   constructor(auth: Auth.OAuth2Client) {
     this.calendar = google.calendar({ version: 'v3', auth });
+  }
+
+  /**
+   * Retry a Google API call with exponential backoff on 429/503 errors.
+   * Throws immediately on 401 (auth revoked) and non-retryable errors.
+   */
+  private async withRetry<T>(
+    fn: () => Promise<T>,
+    maxRetries: number = GOOGLE_MAX_RETRIES,
+    label?: string,
+  ): Promise<T> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (isGoogleApiError(err) && err.code === 401) throw err;
+        if (isRateLimitError(err) || (isGoogleApiError(err) && err.code === 503)) {
+          if (attempt < maxRetries) {
+            const delay = Math.min(
+              1000 * Math.pow(2, attempt) + Math.random() * 1000,
+              GOOGLE_MAX_RETRY_DELAY_MS,
+            );
+            log.warn(
+              { attempt: attempt + 1, delayMs: Math.round(delay), label },
+              'Rate limited, retrying',
+            );
+            await new Promise((r) => setTimeout(r, delay));
+            continue;
+          }
+        }
+        throw err;
+      }
+    }
+    throw new Error('Unreachable');
   }
 
   // ---------- Sync ----------------------------------------------------------
@@ -95,7 +128,7 @@ export class GoogleCalendarClient {
 
         // Only fetch fields we need to reduce bandwidth
         params.fields =
-          'nextPageToken,nextSyncToken,items(id,summary,start,end,status,location,extendedProperties,attendees,recurringEventId,description)';
+          'nextPageToken,nextSyncToken,items(id,summary,start,end,status,location,extendedProperties,attendees,recurringEventId,description,updated)';
 
         const response = await this.calendar.events.list(params);
         const items = response.data.items ?? [];
@@ -114,6 +147,11 @@ export class GoogleCalendarClient {
               itemType: null,
               itemId: null,
               status: EventStatus.Free,
+              location: null,
+              description: null,
+              calendarId: null,
+              lastModifiedByUs: null,
+              googleUpdatedAt: null,
             });
             continue;
           }
@@ -200,14 +238,19 @@ export class GoogleCalendarClient {
     start: string,
     end: string,
   ): Promise<void> {
-    await this.calendar.events.patch({
-      calendarId,
-      eventId,
-      requestBody: {
-        start: { dateTime: start },
-        end: { dateTime: end },
-      },
-    });
+    await this.withRetry(
+      () =>
+        this.calendar.events.patch({
+          calendarId,
+          eventId,
+          requestBody: {
+            start: { dateTime: start },
+            end: { dateTime: end },
+          },
+        }),
+      GOOGLE_MAX_RETRIES,
+      'patchEventTime',
+    );
   }
 
   // ---------- Calendar listing -----------------------------------------------
@@ -235,10 +278,16 @@ export class GoogleCalendarClient {
     let pageToken: string | undefined;
 
     do {
-      const response = await this.calendar.calendarList.list({
-        maxResults: 250,
-        ...(pageToken ? { pageToken } : {}),
-      });
+      const currentPageToken = pageToken;
+      const response = await this.withRetry(
+        () =>
+          this.calendar.calendarList.list({
+            maxResults: 250,
+            ...(currentPageToken ? { pageToken: currentPageToken } : {}),
+          }),
+        GOOGLE_MAX_RETRIES,
+        'listCalendars',
+      );
 
       for (const item of response.data.items ?? []) {
         result.push({
@@ -263,89 +312,161 @@ export class GoogleCalendarClient {
    * For Create ops, the returned Google event ID is set on `op.googleEventId`.
    * Returns an array of operations that failed due to rate limiting (429/503).
    * Other failures are logged but do not abort the batch.
+   *
+   * Delete ops are run concurrently (up to CONCURRENT_DELETES at a time) since
+   * they are independent.  Create/Update ops run sequentially because Creates
+   * need the returned googleEventId before the next op can reference it.
    */
   async applyOperations(
     calendarId: string = 'primary',
     operations: CalendarOperation[],
   ): Promise<CalendarOperation[]> {
-    const failedOps: CalendarOperation[] = [];
-    const MAX_RETRIES = GOOGLE_MAX_RETRIES;
+    // Partition: deletes can run concurrently, everything else is sequential
+    const deleteOps = operations.filter((op) => op.type === CalendarOpType.Delete);
+    const sequentialOps = operations.filter((op) => op.type !== CalendarOpType.Delete);
 
-    for (let i = 0; i < operations.length; i++) {
-      const op = operations[i];
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        try {
-          switch (op.type) {
-            case CalendarOpType.Create: {
-              const googleId = await this.createEvent(calendarId, op);
-              op.googleEventId = googleId;
-              break;
-            }
-            case CalendarOpType.Update: {
-              const gEventId = op.googleEventId;
-              if (!gEventId) {
-                log.warn({ itemId: op.itemId }, 'Update op missing googleEventId, skipping');
-                break;
-              }
-              await this.updateEvent(calendarId, gEventId, op);
-              break;
-            }
-            case CalendarOpType.Delete: {
-              const gEventId = op.googleEventId;
-              if (!gEventId) {
-                log.warn({ itemId: op.itemId }, 'Delete op missing googleEventId, skipping');
-                break;
-              }
-              await this.deleteEvent(calendarId, gEventId);
-              break;
-            }
+    const failedOps: CalendarOperation[] = [];
+
+    // --- Sequential ops (Create / Update) -----------------------------------
+    for (let i = 0; i < sequentialOps.length; i++) {
+      const result = await this.applyOneOp(calendarId, sequentialOps[i], i, sequentialOps.length);
+      if (result === 'auth_revoked') {
+        throw new Error('GOOGLE_AUTH_REVOKED');
+      }
+      if (result === 'rate_limited') {
+        failedOps.push(...sequentialOps.slice(i), ...deleteOps);
+        return failedOps;
+      }
+      if (result === 'failed') {
+        failedOps.push(sequentialOps[i]);
+      }
+    }
+
+    // --- Concurrent deletes -------------------------------------------------
+    if (deleteOps.length > 0) {
+      const deleteFailed = await this.applyDeletesConcurrently(calendarId, deleteOps);
+      failedOps.push(...deleteFailed);
+    }
+
+    return failedOps;
+  }
+
+  /** Run delete ops concurrently with a concurrency limit. */
+  private async applyDeletesConcurrently(
+    calendarId: string,
+    deleteOps: CalendarOperation[],
+  ): Promise<CalendarOperation[]> {
+    const CONCURRENT_DELETES = 6;
+    const failedOps: CalendarOperation[] = [];
+
+    for (let i = 0; i < deleteOps.length; i += CONCURRENT_DELETES) {
+      const batch = deleteOps.slice(i, i + CONCURRENT_DELETES);
+      const results = await Promise.allSettled(
+        batch.map(async (op) => {
+          const result = await this.applyOneOp(calendarId, op, 0, deleteOps.length);
+          if (result === 'auth_revoked') throw new Error('GOOGLE_AUTH_REVOKED');
+          if (result === 'rate_limited' || result === 'failed') return op;
+          return null;
+        }),
+      );
+
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          if (result.reason?.message === 'GOOGLE_AUTH_REVOKED') {
+            throw new Error('GOOGLE_AUTH_REVOKED');
           }
-          break; // Success — exit retry loop
-        } catch (err) {
-          // 401 means token is revoked — don't retry
-          if (isGoogleApiError(err) && err.code === 401) {
-            throw new Error('GOOGLE_AUTH_REVOKED', { cause: err });
-          }
-          // Exponential backoff with jitter on rate limits (429, 403 rate limit) and 503
-          if (isRateLimitError(err) || (isGoogleApiError(err) && err.code === 503)) {
-            if (attempt < MAX_RETRIES) {
-              const jitter = Math.random() * 1000;
-              const delay = Math.min(
-                1000 * Math.pow(2, attempt) + jitter,
-                GOOGLE_MAX_RETRY_DELAY_MS,
-              );
-              log.warn(
-                {
-                  code: isGoogleApiError(err) ? err.code : undefined,
-                  opIndex: i,
-                  attempt: attempt + 1,
-                  delayMs: Math.round(delay),
-                },
-                'Rate limited, retrying',
-              );
-              await new Promise((resolve) => setTimeout(resolve, delay));
-              continue;
-            }
-            // Exhausted retries — fail remaining ops
-            log.warn(
-              {
-                code: isGoogleApiError(err) ? err.code : undefined,
-                opIndex: i,
-                totalOps: operations.length,
-              },
-              'Rate limited, exhausted retries, stopping batch',
-            );
-            failedOps.push(...operations.slice(i));
-            return failedOps;
-          }
-          // Non-retryable error
-          log.error({ opType: op.type, itemId: op.itemId, err }, 'Failed to apply operation');
-          break;
+          // Unexpected rejection — log but don't crash
+          log.error({ err: result.reason }, 'Unexpected error in concurrent delete');
+        } else if (result.value) {
+          failedOps.push(result.value);
         }
+      }
+
+      // If any in this batch were rate-limited, fail the rest
+      if (failedOps.length > 0) {
+        failedOps.push(...deleteOps.slice(i + CONCURRENT_DELETES));
+        break;
       }
     }
 
     return failedOps;
+  }
+
+  /**
+   * Apply a single operation with retries.
+   * Returns null on success, or a failure reason string on terminal failure.
+   */
+  private async applyOneOp(
+    calendarId: string,
+    op: CalendarOperation,
+    opIndex: number,
+    totalOps: number,
+  ): Promise<null | 'auth_revoked' | 'rate_limited' | 'failed'> {
+    const MAX_RETRIES = GOOGLE_MAX_RETRIES;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        switch (op.type) {
+          case CalendarOpType.Create: {
+            const googleId = await this.createEvent(calendarId, op);
+            op.googleEventId = googleId;
+            break;
+          }
+          case CalendarOpType.Update: {
+            const gEventId = op.googleEventId;
+            if (!gEventId) {
+              log.warn({ itemId: op.itemId }, 'Update op missing googleEventId, skipping');
+              break;
+            }
+            await this.updateEvent(calendarId, gEventId, op);
+            break;
+          }
+          case CalendarOpType.Delete: {
+            const gEventId = op.googleEventId;
+            if (!gEventId) {
+              log.warn({ itemId: op.itemId }, 'Delete op missing googleEventId, skipping');
+              break;
+            }
+            await this.deleteEvent(calendarId, gEventId);
+            break;
+          }
+        }
+        return null; // Success
+      } catch (err) {
+        if (isGoogleApiError(err) && err.code === 401) {
+          return 'auth_revoked';
+        }
+        if (isRateLimitError(err) || (isGoogleApiError(err) && err.code === 503)) {
+          if (attempt < MAX_RETRIES) {
+            const jitter = Math.random() * 1000;
+            const delay = Math.min(1000 * Math.pow(2, attempt) + jitter, GOOGLE_MAX_RETRY_DELAY_MS);
+            log.warn(
+              {
+                code: isGoogleApiError(err) ? err.code : undefined,
+                opIndex,
+                attempt: attempt + 1,
+                delayMs: Math.round(delay),
+              },
+              'Rate limited, retrying',
+            );
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+          log.warn(
+            {
+              code: isGoogleApiError(err) ? err.code : undefined,
+              opIndex,
+              totalOps,
+            },
+            'Rate limited, exhausted retries',
+          );
+          return 'rate_limited';
+        }
+        log.error({ opType: op.type, itemId: op.itemId, err }, 'Failed to apply operation');
+        return 'failed';
+      }
+    }
+    return null;
   }
 
   // ---------- Nuke (delete all managed events) -----------------------------
@@ -391,47 +512,52 @@ export class GoogleCalendarClient {
       pageToken = response.data.nextPageToken ?? undefined;
     } while (pageToken);
 
-    // Delete sequentially with rate-limit-aware retry
-    for (let i = 0; i < fluxureEventIds.length; i++) {
-      const eventId = fluxureEventIds[i];
-      let success = false;
-      for (let attempt = 0; attempt <= GOOGLE_MAX_DELETE_RETRIES; attempt++) {
-        try {
-          await this.calendar.events.delete({ calendarId, eventId });
-          success = true;
-          break;
-        } catch (err: unknown) {
-          if (isGoogleApiError(err) && (err.code === 404 || err.code === 410)) {
-            break; // Already gone
-          }
-          if (isRateLimitError(err) || (isGoogleApiError(err) && err.code === 503)) {
-            if (attempt < GOOGLE_MAX_DELETE_RETRIES) {
-              const delay = Math.min(
-                1000 * Math.pow(2, attempt) + Math.random() * 1000,
-                GOOGLE_MAX_RETRY_DELAY_MS,
-              );
-              log.warn(
-                { eventId, attempt: attempt + 1, delayMs: Math.round(delay) },
-                'Rate limited deleting event, retrying',
-              );
-              await new Promise((resolve) => setTimeout(resolve, delay));
-              continue;
-            }
-            log.warn({ eventId }, 'Exhausted retries deleting event, skipping');
-          } else {
-            log.error({ eventId, err }, 'Failed to delete managed event');
-          }
-          break;
-        }
-      }
-      if (success) deleted++;
-      // Small delay between deletes to stay under rate limits
-      if (i < fluxureEventIds.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, GOOGLE_INTER_DELETE_DELAY_MS));
+    // Delete concurrently in batches to stay under Google's ~10 QPS rate limit
+    const CONCURRENT_DELETES = 6;
+    for (let i = 0; i < fluxureEventIds.length; i += CONCURRENT_DELETES) {
+      const batch = fluxureEventIds.slice(i, i + CONCURRENT_DELETES);
+      const results = await Promise.allSettled(
+        batch.map((eventId) => this.deleteOneEvent(calendarId, eventId)),
+      );
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) deleted++;
       }
     }
 
     return deleted;
+  }
+
+  /** Delete a single event with retry logic. Returns true if successfully deleted. */
+  private async deleteOneEvent(calendarId: string, eventId: string): Promise<boolean> {
+    for (let attempt = 0; attempt <= GOOGLE_MAX_DELETE_RETRIES; attempt++) {
+      try {
+        await this.calendar.events.delete({ calendarId, eventId });
+        return true;
+      } catch (err: unknown) {
+        if (isGoogleApiError(err) && (err.code === 404 || err.code === 410)) {
+          return false; // Already gone
+        }
+        if (isRateLimitError(err) || (isGoogleApiError(err) && err.code === 503)) {
+          if (attempt < GOOGLE_MAX_DELETE_RETRIES) {
+            const delay = Math.min(
+              1000 * Math.pow(2, attempt) + Math.random() * 1000,
+              GOOGLE_MAX_RETRY_DELAY_MS,
+            );
+            log.warn(
+              { eventId, attempt: attempt + 1, delayMs: Math.round(delay) },
+              'Rate limited deleting event, retrying',
+            );
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+          log.warn({ eventId }, 'Exhausted retries deleting event, skipping');
+        } else {
+          log.error({ eventId, err }, 'Failed to delete managed event');
+        }
+        return false;
+      }
+    }
+    return false;
   }
 
   // ---------- Push notification channels ------------------------------------
@@ -446,16 +572,21 @@ export class GoogleCalendarClient {
   ): Promise<{ resourceId: string; expiration: string }> {
     const expiration = ttlMs ? Date.now() + ttlMs : Date.now() + DEFAULT_WATCH_TTL_MS;
 
-    const response = await this.calendar.events.watch({
-      calendarId,
-      requestBody: {
-        id: channelId,
-        type: 'web_hook',
-        address,
-        token,
-        expiration: String(expiration),
-      },
-    });
+    const response = await this.withRetry(
+      () =>
+        this.calendar.events.watch({
+          calendarId,
+          requestBody: {
+            id: channelId,
+            type: 'web_hook',
+            address,
+            token,
+            expiration: String(expiration),
+          },
+        }),
+      GOOGLE_MAX_RETRIES,
+      'watchEvents',
+    );
 
     return {
       resourceId: response.data.resourceId || '',
@@ -465,12 +596,17 @@ export class GoogleCalendarClient {
 
   /** Stop a push notification channel. */
   async stopWatch(channelId: string, resourceId: string): Promise<void> {
-    await this.calendar.channels.stop({
-      requestBody: {
-        id: channelId,
-        resourceId,
-      },
-    });
+    await this.withRetry(
+      () =>
+        this.calendar.channels.stop({
+          requestBody: {
+            id: channelId,
+            resourceId,
+          },
+        }),
+      GOOGLE_MAX_RETRIES,
+      'stopWatch',
+    );
   }
 
   // ---------- Internal helpers ----------------------------------------------
@@ -503,6 +639,8 @@ export class GoogleCalendarClient {
     const start = event.start?.dateTime ?? event.start?.date ?? '';
     const end = event.end?.dateTime ?? event.end?.date ?? '';
 
+    const lastModifiedByUs = privateProps[EXTENDED_PROPS.lastModifiedByUs] ?? null;
+
     return {
       id: fluxureId || event.id || '',
       googleEventId: event.id ?? '',
@@ -513,8 +651,11 @@ export class GoogleCalendarClient {
       itemType,
       itemId,
       status,
-      location: event.location ?? undefined,
-      description: event.description ?? undefined,
+      location: event.location ?? null,
+      description: event.description ?? null,
+      calendarId: null,
+      lastModifiedByUs,
+      googleUpdatedAt: event.updated ?? null,
     };
   }
 
@@ -535,10 +676,15 @@ export class GoogleCalendarClient {
       [EXTENDED_PROPS.lastModifiedByUs]: new Date().toISOString(),
     };
 
+    // Normalize timestamps to RFC 3339 for Google Calendar API.
+    // DB returns "2026-03-24 09:00:00+00", API needs "2026-03-24T09:00:00.000Z".
+    const startISO = new Date(op.start).toISOString();
+    const endISO = new Date(op.end).toISOString();
+
     return {
       summary: prefixedTitle,
-      start: { dateTime: op.start },
-      end: { dateTime: op.end },
+      start: { dateTime: startISO },
+      end: { dateTime: endISO },
       transparency: op.status === EventStatus.Free ? 'transparent' : 'opaque',
       reminders: {
         useDefault: op.useDefaultReminders ?? false,

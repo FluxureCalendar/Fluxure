@@ -92,6 +92,17 @@ export class CalendarPoller {
   }
 
   /**
+   * Reset the in-memory sync token and change-detection cache.
+   * Must be called before forcePoll() during a force sync so that:
+   * - syncToken=null triggers a full (not incremental) Google API fetch
+   * - lastEventsById is empty so all fetched events are treated as new changes
+   */
+  resetCache(): void {
+    this.syncToken = null;
+    this.lastEventsById.clear();
+  }
+
+  /**
    * Signal that we just wrote changes to the calendar.
    * The next poll cycle will be skipped to prevent a feedback loop where we
    * react to our own modifications.
@@ -150,8 +161,14 @@ export class CalendarPoller {
       }
     } catch (error) {
       // 401 means the token was revoked — stop polling and notify caller
-      if (isGoogleApiError(error) && error.code === 401) {
-        log.error('Google auth error (401) — token likely revoked');
+      // 403 means insufficient scopes — token doesn't have calendar permissions
+      if (isGoogleApiError(error) && (error.code === 401 || error.code === 403)) {
+        log.error(
+          { code: error.code },
+          error.code === 401
+            ? 'Google auth error (401) — token likely revoked'
+            : 'Google scope error (403) — token lacks calendar permissions, needs re-authorization',
+        );
         this.stop();
         if (this.onAuthError) {
           await this.onAuthError();
@@ -173,16 +190,21 @@ export class CalendarPoller {
       }
     } finally {
       this.isPolling = false;
+      // Drain any webhook-triggered sync that arrived while we were polling.
+      // Run it BEFORE resolving forcePoll callers so they see the latest data.
+      if (this.pendingSync) {
+        this.pendingSync = false;
+        try {
+          await this.poll();
+        } catch (drainErr) {
+          log.error({ err: drainErr }, 'Pending sync drain failed');
+        }
+      }
       // Resolve any callers waiting on forcePoll()
       if (this.pendingForcePollResolvers.length > 0) {
         const resolvers = this.pendingForcePollResolvers;
         this.pendingForcePollResolvers = [];
         for (const resolve of resolvers) resolve();
-      }
-      // Drain any webhook-triggered sync that arrived while we were polling
-      if (this.pendingSync) {
-        this.pendingSync = false;
-        void this.poll();
       }
     }
   }
@@ -201,8 +223,12 @@ export class CalendarPoller {
         return await this.client.syncEvents(this.calendarId, this.syncToken);
       } catch (error) {
         lastError = error;
-        // 401 and 410 should not be retried — propagate immediately
-        if (isGoogleApiError(error) && (error.code === 401 || error.code === 410)) {
+        // 401, 403, and 410 should not be retried — propagate immediately
+        // 403 = insufficient scopes (token doesn't have calendar permission)
+        if (
+          isGoogleApiError(error) &&
+          (error.code === 401 || error.code === 403 || error.code === 410)
+        ) {
           throw error;
         }
         // Restore previous sync token so the retry uses the same starting point

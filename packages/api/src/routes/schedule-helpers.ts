@@ -1,13 +1,6 @@
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
-import {
-  habits,
-  tasks,
-  smartMeetings,
-  focusTimeRules,
-  bufferConfig,
-  scheduleChanges,
-} from '../db/pg-schema.js';
+import { habits, tasks, smartMeetings, focusTimeRules, scheduleChanges } from '../db/pg-schema.js';
 import { calculateScheduleQuality } from '@fluxure/engine';
 import type {
   BufferConfig,
@@ -18,26 +11,20 @@ import type {
   TimeSlot,
   QualityScore,
 } from '@fluxure/shared';
-import type { Habit, Task, SmartMeeting, FocusTimeRule } from '@fluxure/shared';
+import type { Habit, Task, SmartMeeting, FocusTimeRule, DayOfWeek } from '@fluxure/shared';
 import {
   Priority,
-  DecompressionTarget,
   ItemType,
   CalendarOpType,
   ScheduleChangeType,
-  Frequency,
   startOfDayInTz,
   nextDayInTz,
   getDayOfWeekInTz,
-  getDatePartsInTz,
-  DEFAULT_TRAVEL_TIME_MINUTES,
-  DEFAULT_DECOMPRESSION_MINUTES,
   DEFAULT_BREAK_BETWEEN_MINUTES,
-  DEFAULT_WEEKDAYS,
 } from '@fluxure/shared';
-import { toHabit, toTask, toMeeting, toFocusRule, toBufConfig } from '../utils/converters.js';
+import { toHabit, toTask, toMeeting, toFocusRule } from '../utils/converters.js';
 import { getUserSettingsCached } from '../cache/user-settings.js';
-const DAY_ABBREVS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const DAY_ABBREVS: DayOfWeek[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 /**
  * Check if a habit should be scheduled on a given day based on its frequency config.
@@ -48,35 +35,8 @@ export function shouldHabitScheduleOnDay(
   day: Date,
   tz: string,
 ): boolean {
-  if (habit.frequency === Frequency.Daily || habit.frequency === Frequency.Custom) {
-    const applicableDays = habit.frequencyConfig?.days ?? [...DEFAULT_WEEKDAYS];
-    const dayAbbrev = DAY_ABBREVS[getDayOfWeekInTz(day, tz)];
-    return applicableDays.includes(dayAbbrev);
-  }
-
-  if (habit.frequency === Frequency.Weekly) {
-    const applicableDays = habit.frequencyConfig?.days ?? ['mon'];
-    const dayAbbrev = DAY_ABBREVS[getDayOfWeekInTz(day, tz)];
-    return applicableDays.includes(dayAbbrev);
-  }
-
-  if (habit.frequency === Frequency.Monthly) {
-    const config = habit.frequencyConfig;
-    const localDay = getDatePartsInTz(day, tz).day;
-
-    if (config?.monthDay != null) {
-      return localDay === config.monthDay;
-    }
-    if (config?.monthWeek != null && config?.monthWeekday != null) {
-      const dayAbbrev = DAY_ABBREVS[getDayOfWeekInTz(day, tz)];
-      if (dayAbbrev !== config.monthWeekday) return false;
-      const weekOfMonth = Math.ceil(localDay / 7);
-      return weekOfMonth === Math.min(5, Math.max(1, config.monthWeek));
-    }
-    return localDay === 1; // Default to 1st of month
-  }
-
-  return true; // Unknown frequency — include
+  const dayAbbrev = DAY_ABBREVS[getDayOfWeekInTz(day, tz)];
+  return habit.days.includes(dayAbbrev);
 }
 
 export { getUserSettingsCached as getUserSettings } from '../cache/user-settings.js';
@@ -90,7 +50,7 @@ export async function loadDomainObjectsForQuality(userId: string): Promise<{
   buf: BufferConfig;
   userSettings: UserSettings;
 }> {
-  const [allHabitsRaw, allTasksRaw, allMeetingsRaw, allFocusRulesRaw, bufRows, userSettings] =
+  const [allHabitsRaw, allTasksRaw, allMeetingsRaw, allFocusRulesRaw, userSettings] =
     await Promise.all([
       db
         .select()
@@ -108,7 +68,6 @@ export async function loadDomainObjectsForQuality(userId: string): Promise<{
         .select()
         .from(focusTimeRules)
         .where(and(eq(focusTimeRules.userId, userId), eq(focusTimeRules.enabled, true))),
-      db.select().from(bufferConfig).where(eq(bufferConfig.userId, userId)),
       getUserSettingsCached(userId),
     ]);
 
@@ -116,16 +75,10 @@ export async function loadDomainObjectsForQuality(userId: string): Promise<{
   const allTasks = allTasksRaw.map(toTask);
   const allMeetings = allMeetingsRaw.map(toMeeting);
   const allFocusRules = allFocusRulesRaw.map(toFocusRule);
-  const buf: BufferConfig =
-    bufRows.length > 0
-      ? toBufConfig(bufRows[0])
-      : {
-          id: 'default',
-          travelTimeMinutes: DEFAULT_TRAVEL_TIME_MINUTES,
-          decompressionMinutes: DEFAULT_DECOMPRESSION_MINUTES,
-          breakBetweenItemsMinutes: DEFAULT_BREAK_BETWEEN_MINUTES,
-          applyDecompressionTo: DecompressionTarget.All,
-        };
+  const buf: BufferConfig = {
+    breakBetweenItemsMinutes:
+      userSettings.breakBetweenItemsMinutes ?? DEFAULT_BREAK_BETWEEN_MINUTES,
+  };
 
   return { allHabits, allTasks, allMeetings, allFocusRules, buf, userSettings };
 }

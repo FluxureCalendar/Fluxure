@@ -141,7 +141,7 @@ router.patch(
       return;
     }
 
-    if (enabled) {
+    if (enabled && !existing[0].enabled) {
       const limits = getPlanLimits(req.userPlan);
       const [{ count: enabledCount }] = await db
         .select({ count: count() })
@@ -219,11 +219,11 @@ router.patch(
         const settings = { ...(userRows[0].settings as Record<string, unknown>) };
         let changed = false;
         if (settings.defaultHabitCalendarId === id) {
-          settings.defaultHabitCalendarId = 'primary';
+          settings.defaultHabitCalendarId = null;
           changed = true;
         }
         if (settings.defaultTaskCalendarId === id) {
-          settings.defaultTaskCalendarId = 'primary';
+          settings.defaultTaskCalendarId = null;
           changed = true;
         }
         if (changed) {

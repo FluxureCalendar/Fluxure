@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { eq, and, desc, gte, sql, count } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import { db } from '../db/pg-index.js';
-import { habits, scheduledEvents, habitCompletions, calendars } from '../db/pg-schema.js';
+import { habits, scheduledEvents, habitCompletions } from '../db/pg-schema.js';
 import type { Habit, HabitCompletion } from '@fluxure/shared';
 import { EventStatus, addDays, toDateStr, getPlanLimits } from '@fluxure/shared';
 import { toHabit } from '../utils/converters.js';
@@ -18,11 +18,14 @@ import {
 import { logActivity } from './activity.js';
 import { broadcastToUser } from '../ws.js';
 import { triggerReschedule } from '../polling-ref.js';
+import { completeHabit } from '../services/habit-completion.js';
+import { cancelAutoCompleteJob, cancelAllForHabit } from '../jobs/habit-auto-complete.js';
 import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { createLogger } from '../logger.js';
 import { getUserTimezoneCached as getUserTimezone } from '../cache/user-settings.js';
 import { detectCycle } from '../utils/cycle-detection.js';
+import { buildUpdates, validateCalendarOwnership } from '../utils/route-helpers.js';
 
 const log = createLogger('habits');
 
@@ -49,8 +52,7 @@ router.get(
         idealTime: habits.idealTime,
         durationMin: habits.durationMin,
         durationMax: habits.durationMax,
-        frequency: habits.frequency,
-        frequencyConfig: habits.frequencyConfig,
+        days: habits.days,
         schedulingHours: habits.schedulingHours,
         forced: habits.forced,
         autoDecline: habits.autoDecline,
@@ -115,11 +117,7 @@ router.post(
     }
 
     if (body.calendarId) {
-      const [cal] = await db
-        .select({ id: calendars.id })
-        .from(calendars)
-        .where(and(eq(calendars.id, body.calendarId), eq(calendars.userId, req.userId)));
-      if (!cal) {
+      if (!(await validateCalendarOwnership(body.calendarId, req.userId))) {
         sendError(res, 400, 'Invalid calendar ID');
         return;
       }
@@ -134,9 +132,8 @@ router.post(
       idealTime: body.idealTime,
       durationMin: body.durationMin,
       durationMax: body.durationMax,
-      frequency: body.frequency,
-      frequencyConfig: body.frequencyConfig ?? null,
-      schedulingHours: body.schedulingHours ?? 'working',
+      days: body.days,
+      schedulingHours: body.schedulingHours ?? ('working' as const),
       forced: false,
       autoDecline: body.autoDecline ?? false,
       dependsOn: body.dependsOn ?? null,
@@ -182,6 +179,24 @@ router.put(
 
     const body = parsed.data;
 
+    // Cross-field validation: merge partial update with existing values
+    const mergedWindowStart = body.windowStart ?? existing[0].windowStart;
+    const mergedWindowEnd = body.windowEnd ?? existing[0].windowEnd;
+    if (mergedWindowStart && mergedWindowEnd && mergedWindowStart === mergedWindowEnd) {
+      sendError(res, 400, 'windowStart and windowEnd must not be identical');
+      return;
+    }
+    const mergedDurationMin = body.durationMin ?? existing[0].durationMin;
+    const mergedDurationMax = body.durationMax ?? existing[0].durationMax;
+    if (
+      mergedDurationMin !== undefined &&
+      mergedDurationMax !== undefined &&
+      mergedDurationMin > mergedDurationMax
+    ) {
+      sendError(res, 400, 'durationMin must be <= durationMax');
+      return;
+    }
+
     if (body.dependsOn !== undefined && body.dependsOn !== null) {
       if (body.dependsOn === id) {
         sendError(res, 400, 'A habit cannot depend on itself');
@@ -207,42 +222,45 @@ router.put(
     }
 
     if (body.calendarId) {
-      const [cal] = await db
-        .select({ id: calendars.id })
-        .from(calendars)
-        .where(and(eq(calendars.id, body.calendarId), eq(calendars.userId, req.userId)));
-      if (!cal) {
+      if (!(await validateCalendarOwnership(body.calendarId, req.userId))) {
         sendError(res, 400, 'Invalid calendar ID');
         return;
       }
     }
 
-    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
-
-    if (body.name !== undefined) updates.name = body.name;
-    if (body.priority !== undefined) updates.priority = body.priority;
-    if (body.windowStart !== undefined) updates.windowStart = body.windowStart;
-    if (body.windowEnd !== undefined) updates.windowEnd = body.windowEnd;
-    if (body.idealTime !== undefined) updates.idealTime = body.idealTime;
-    if (body.durationMin !== undefined) updates.durationMin = body.durationMin;
-    if (body.durationMax !== undefined) updates.durationMax = body.durationMax;
-    if (body.frequency !== undefined) updates.frequency = body.frequency;
-    if (body.frequencyConfig !== undefined) updates.frequencyConfig = body.frequencyConfig;
-    if (body.schedulingHours !== undefined) updates.schedulingHours = body.schedulingHours;
-    if (body.forced !== undefined) updates.forced = body.forced;
-    if (body.autoDecline !== undefined) updates.autoDecline = body.autoDecline;
-    if (body.dependsOn !== undefined) updates.dependsOn = body.dependsOn;
-    if (body.enabled !== undefined) updates.enabled = body.enabled;
-    if (body.skipBuffer !== undefined) updates.skipBuffer = body.skipBuffer;
-    if (body.notifications !== undefined) updates.notifications = body.notifications;
-    if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
-    if (body.color !== undefined) updates.color = body.color;
+    const updates: Record<string, unknown> = {
+      ...buildUpdates(body, [
+        'name',
+        'priority',
+        'windowStart',
+        'windowEnd',
+        'idealTime',
+        'durationMin',
+        'durationMax',
+        'days',
+        'schedulingHours',
+        'forced',
+        'autoDecline',
+        'dependsOn',
+        'enabled',
+        'skipBuffer',
+        'notifications',
+        'calendarId',
+        'color',
+      ] as const),
+      updatedAt: new Date().toISOString(),
+    };
 
     const updated = await db
       .update(habits)
       .set(updates)
       .where(and(eq(habits.id, id), eq(habits.userId, req.userId)))
       .returning();
+    if (parsed.data.enabled === false) {
+      cancelAllForHabit(id, req.userId).catch((err) =>
+        log.warn({ err, habitId: id }, 'Failed to cancel auto-complete jobs on habit disable'),
+      );
+    }
     logActivity(req.userId, 'update', 'habit', id, { fields: Object.keys(updates) }).catch((err) =>
       log.error({ err }, 'Activity log error'),
     );
@@ -271,6 +289,9 @@ router.delete(
     // Delete the habit but keep scheduled_events rows — the reschedule will
     // diff against them and generate Delete ops for Google Calendar cleanup.
     await db.delete(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
+    cancelAllForHabit(id, req.userId).catch((err) =>
+      log.warn({ err, habitId: id }, 'Failed to cancel auto-complete jobs on habit delete'),
+    );
     logActivity(req.userId, 'delete', 'habit', id, { name: existing[0].name }).catch((err) =>
       log.error({ err }, 'Activity log error'),
     );
@@ -401,58 +422,32 @@ router.post(
     }
     const { scheduledDate } = parsed2.data;
 
-    const now = new Date().toISOString();
+    const result = await completeHabit(req.userId, id, scheduledDate);
 
-    try {
-      const inserted = await db
-        .insert(habitCompletions)
-        .values({
-          userId: req.userId,
-          habitId: id,
-          scheduledDate,
-          completedAt: now,
-        })
-        .returning();
-
-      logActivity(req.userId, 'create', 'habit', id, { completion: scheduledDate }).catch((err) =>
-        log.error({ err }, 'Activity log error'),
+    if (result) {
+      // Cancel any pending auto-complete job for this habit+date
+      cancelAutoCompleteJob(id, scheduledDate, req.userId).catch((err) =>
+        log.warn({ err, habitId: id, scheduledDate }, 'Failed to cancel auto-complete job'),
       );
-      broadcastToUser(req.userId, 'schedule_updated', 'Habit completed');
-      triggerReschedule('Habit completed', req.userId);
-
-      res.status(201).json({
-        id: inserted[0].id,
+      res.status(201).json(result);
+    } else {
+      // Already completed — return existing
+      const rows = await db
+        .select()
+        .from(habitCompletions)
+        .where(
+          and(
+            eq(habitCompletions.userId, req.userId),
+            eq(habitCompletions.habitId, id),
+            eq(habitCompletions.scheduledDate, scheduledDate),
+          ),
+        );
+      res.status(200).json({
+        id: rows[0]?.id ?? '',
         habitId: id,
         scheduledDate,
-        completedAt: now,
+        completedAt: rows[0]?.completedAt ?? new Date().toISOString(),
       });
-    } catch (err: unknown) {
-      // Handle duplicate completion idempotently
-      if (
-        err &&
-        typeof err === 'object' &&
-        'code' in err &&
-        (err as Record<string, unknown>).code === '23505'
-      ) {
-        const existing = await db
-          .select()
-          .from(habitCompletions)
-          .where(
-            and(
-              eq(habitCompletions.userId, req.userId),
-              eq(habitCompletions.habitId, id),
-              eq(habitCompletions.scheduledDate, scheduledDate),
-            ),
-          );
-        res.status(200).json({
-          id: existing[0]?.id ?? '',
-          habitId: id,
-          scheduledDate,
-          completedAt: existing[0]?.completedAt ?? now,
-        });
-        return;
-      }
-      throw err;
     }
   }),
 );
@@ -469,8 +464,7 @@ router.get(
         userId: habits.userId,
         name: habits.name,
         priority: habits.priority,
-        frequency: habits.frequency,
-        frequencyConfig: habits.frequencyConfig,
+        days: habits.days,
         durationMin: habits.durationMin,
         durationMax: habits.durationMax,
         windowStart: habits.windowStart,
@@ -529,7 +523,7 @@ router.get(
     const completedDates = new Set(rows.map((r) => r.scheduledDate));
 
     let streak = 0;
-    for (let i = 0; i < Math.min(maxStreakDays, 365); i++) {
+    for (let i = 1; i < Math.min(maxStreakDays, 365); i++) {
       const d = addDays(today, -i);
       // Skip days when this habit isn't scheduled based on its frequency
       if (!shouldHabitScheduleOnDay(habit, d, tz)) continue;
@@ -600,9 +594,10 @@ router.get(
       const dates = habitCompletionRows.map((c) => c.scheduledDate);
       const dateSet = new Set(dates);
 
-      // Streak: count consecutive scheduled days backward from today, capped at maxStreak
+      // Streak: count consecutive scheduled days backward from yesterday, capped at maxStreak
+      // Skip today (i=0) so an incomplete today doesn't reset the streak
       let streak = 0;
-      for (let i = 0; i < maxStreak; i++) {
+      for (let i = 1; i < maxStreak; i++) {
         const d = addDays(now, -i);
         // Skip days when this habit isn't scheduled based on its frequency
         if (!shouldHabitScheduleOnDay(habit, d, tz)) continue;

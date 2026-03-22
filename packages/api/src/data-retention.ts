@@ -38,6 +38,7 @@ type CleanupTable =
   | 'email_verifications'
   | 'oauth_states'
   | 'stripe_webhook_events'
+  | 'habit_completions'
   | 'calendar_events';
 
 /** Runtime whitelist of tables allowed in cleanup DELETEs (defense-in-depth against SQL injection). */
@@ -49,8 +50,14 @@ const VALID_CLEANUP_TABLES: ReadonlySet<string> = new Set<CleanupTable>([
   'email_verifications',
   'oauth_states',
   'stripe_webhook_events',
+  'habit_completions',
   'calendar_events',
 ]);
+
+/** Maps tables that use a non-standard primary key column. */
+const PK_COLUMN_OVERRIDES: Partial<Record<CleanupTable, string>> = {
+  oauth_states: 'state_hash',
+};
 
 /**
  * Delete rows in batches to avoid long-running locks on large tables.
@@ -64,11 +71,12 @@ async function batchDeleteByCondition(
   if (!VALID_CLEANUP_TABLES.has(tableName)) {
     throw new Error(`Invalid cleanup table: ${tableName}`);
   }
+  const pkCol = sql.identifier(PK_COLUMN_OVERRIDES[tableName] ?? 'id');
   let deleted = 0;
   while (true) {
     const result = await db.execute(sql`
-      DELETE FROM ${sql.identifier(tableName)} WHERE id IN (
-        SELECT id FROM ${sql.identifier(tableName)} WHERE ${conditionSql} LIMIT ${batchSize}
+      DELETE FROM ${sql.identifier(tableName)} WHERE ${pkCol} IN (
+        SELECT ${pkCol} FROM ${sql.identifier(tableName)} WHERE ${conditionSql} LIMIT ${batchSize}
       )
     `);
     const count = (result as { rowCount?: number }).rowCount ?? 0;
@@ -105,6 +113,11 @@ export async function cleanupScheduleChanges(): Promise<number> {
   return batchDeleteByCondition('schedule_changes', sql`created_at < ${cutoff}`);
 }
 
+export async function cleanupOldHabitCompletions(): Promise<number> {
+  const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+  return batchDeleteByCondition('habit_completions', sql`completed_at < ${cutoff}`);
+}
+
 export async function cleanupStripeWebhookEvents(): Promise<number> {
   const cutoff = new Date(
     Date.now() - STRIPE_WEBHOOK_EVENTS_RETENTION_DAYS * 24 * 60 * 60 * 1000,
@@ -137,6 +150,7 @@ async function runRetentionCleanup(): Promise<void> {
       verificationsDeleted,
       webhookEventsDeleted,
       calendarEventsDeleted,
+      habitCompletionsDeleted,
       trialsReverted,
     ] = await Promise.all([
       cleanupActivityLog(),
@@ -146,6 +160,7 @@ async function runRetentionCleanup(): Promise<void> {
       cleanupExpiredVerifications(),
       cleanupStripeWebhookEvents(),
       cleanupCalendarEvents(),
+      cleanupOldHabitCompletions(),
       revertExpiredTrials(),
     ]);
 
@@ -157,6 +172,7 @@ async function runRetentionCleanup(): Promise<void> {
       verificationsDeleted > 0 ||
       webhookEventsDeleted > 0 ||
       calendarEventsDeleted > 0 ||
+      habitCompletionsDeleted > 0 ||
       trialsReverted > 0
     ) {
       log.info(
@@ -168,6 +184,7 @@ async function runRetentionCleanup(): Promise<void> {
           verificationsDeleted,
           webhookEventsDeleted,
           calendarEventsDeleted,
+          habitCompletionsDeleted,
           trialsReverted,
         },
         'Data retention cleanup completed',
