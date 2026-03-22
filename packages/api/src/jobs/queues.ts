@@ -3,6 +3,11 @@ import type { ConnectionOptions, Job } from 'bullmq';
 import type { ExportCategory } from './data-export.js';
 import { getRedisClient } from '../cache/redis.js';
 import { createLogger } from '../logger.js';
+import {
+  startAutoCompleteQueue,
+  startAutoCompleteWorker,
+  stopAutoComplete,
+} from './habit-auto-complete.js';
 
 const log = createLogger('queues');
 
@@ -76,6 +81,7 @@ export async function startQueues(): Promise<boolean> {
   maintenanceQueue = new Queue(MAINTENANCE_QUEUE, { connection, defaultJobOptions });
   dataExportQueue = new Queue(DATA_EXPORT_QUEUE, { connection, defaultJobOptions });
   rescheduleQueue = new Queue(RESCHEDULE_QUEUE, { connection, defaultJobOptions });
+  startAutoCompleteQueue(connection);
 
   // Register repeatable maintenance jobs via upsertJobScheduler
   await maintenanceQueue.upsertJobScheduler('cleanup:activity-log', {
@@ -242,6 +248,8 @@ export function startWorkers(): boolean {
     log.error({ jobId: job?.id, jobData: job?.data, err }, 'Reschedule job failed');
   });
 
+  startAutoCompleteWorker(connection);
+
   log.info('BullMQ workers started');
   return true;
 }
@@ -249,6 +257,8 @@ export function startWorkers(): boolean {
 // --- Graceful shutdown ---
 
 export async function stopQueues(): Promise<void> {
+  await stopAutoComplete();
+
   const closeOps: Promise<void>[] = [];
 
   // Close workers first

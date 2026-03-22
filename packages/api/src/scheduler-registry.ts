@@ -1,4 +1,4 @@
-import { eq, and, isNotNull, inArray, lt, gte, lte, sql } from 'drizzle-orm';
+import { eq, and, isNotNull, inArray, lt, gt, gte, lte, asc, sql } from 'drizzle-orm';
 import { db } from './db/pg-index.js';
 import {
   users,
@@ -6,11 +6,11 @@ import {
   tasks,
   smartMeetings,
   focusTimeRules,
-  bufferConfig,
   calendars,
   calendarEvents,
   scheduledEvents,
   scheduleChanges,
+  habitCompletions,
   activityLog,
 } from './db/pg-schema.js';
 import {
@@ -29,7 +29,6 @@ import type {
   UserSettings,
 } from '@fluxure/shared';
 import {
-  DecompressionTarget,
   EventStatus,
   ItemType,
   CalendarOpType,
@@ -37,23 +36,23 @@ import {
   SCHEDULE_LOOKBACK_MS,
   MIN_SCHEDULE_CHANGE_MS,
   SCHEDULER_BOOT_CONCURRENCY,
-  DEFAULT_BUFFER_CONFIG,
+  DEFAULT_BREAK_BETWEEN_MINUTES,
   DEFAULT_WORKING_HOURS,
   DEFAULT_PERSONAL_HOURS,
   DEFAULT_TIMEZONE,
   DEFAULT_SCHEDULING_WINDOW_DAYS,
-  DEFAULT_PAST_EVENT_RETENTION_DAYS,
+  PAST_EVENT_RETENTION_DAYS,
   MS_PER_DAY,
   getPlanLimits,
 } from '@fluxure/shared';
 import { recordScheduleChanges } from './routes/schedule.js';
 import { broadcastToUser, debouncedBroadcastToUser } from './ws.js';
-import { IDLE_TIMEOUT_MS, SCHEDULE_CHANGES_RETENTION_DAYS } from './config.js';
+import { IDLE_TIMEOUT_MS, SCHEDULE_CHANGES_RETENTION_DAYS, isSelfHosted } from './config.js';
 import { getWorkerPool } from './workers/pool.js';
 import { cacheHashDelAll } from './cache/redis.js';
-import { toHabit, toTask, toMeeting, toFocusRule, toBufConfig } from './utils/converters.js';
+import { toHabit, toTask, toMeeting, toFocusRule } from './utils/converters.js';
 import { createLogger } from './logger.js';
-import { withDistributedLock } from './distributed/lock.js';
+import { withDistributedLock, LockNotAcquiredError } from './distributed/lock.js';
 import {
   claimUser,
   releaseUser,
@@ -61,6 +60,7 @@ import {
   stopRefreshLoop,
 } from './distributed/scheduler-owner.js';
 import { isQueuesStarted } from './jobs/queues.js';
+import { registerBulkForUser, cancelAllForUser } from './jobs/habit-auto-complete.js';
 
 const log = createLogger('scheduler');
 
@@ -106,20 +106,36 @@ export class UserScheduler {
 
   // Cached settings (loaded on start, refreshable)
   private cachedUserSettings: UserSettings | null = null;
-  private cachedBufferConfig: BufferConfigType | null = null;
   private cachedCalIdToGoogleCalId: Map<string, string> = new Map();
   private hasWritableCalendar = false;
 
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
     // Local chain is the outer lock (instant queuing), distributed lock acquired inside
-    // to avoid TTL being consumed while waiting for the local chain
+    // to avoid TTL being consumed while waiting for the local chain.
+    // Retries handle stale locks from crashed processes or rolling restarts.
     return new Promise<T>((resolve, reject) => {
       this.operationLock = this.operationLock.then(async () => {
-        try {
-          const result = await withDistributedLock(`lock:reschedule:${this.userId}`, 300_000, fn);
-          resolve(result);
-        } catch (e) {
-          reject(e);
+        const key = `lock:reschedule:${this.userId}`;
+        const maxRetries = 5;
+        const retryDelayMs = 2_000;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            const result = await withDistributedLock(key, 300_000, fn);
+            resolve(result);
+            return;
+          } catch (e) {
+            if (e instanceof LockNotAcquiredError && attempt < maxRetries) {
+              log.warn(
+                { userId: this.userId, attempt, maxRetries },
+                'Lock busy, retrying (likely stale from restart)',
+              );
+              await new Promise((r) => setTimeout(r, retryDelayMs));
+              continue;
+            }
+            reject(e);
+            return;
+          }
         }
       });
     });
@@ -139,11 +155,10 @@ export class UserScheduler {
     return this.pollerManager;
   }
 
-  /** Refresh cached user settings and buffer config from DB. */
+  /** Refresh cached user settings from DB. */
   async refreshSettings(): Promise<void> {
-    const [currentUserRows, bufRows, enabledCals] = await Promise.all([
+    const [currentUserRows, enabledCals] = await Promise.all([
       db.select().from(users).where(eq(users.id, this.userId)),
-      db.select().from(bufferConfig).where(eq(bufferConfig.userId, this.userId)),
       db.select().from(calendars).where(eq(calendars.userId, this.userId)),
     ]);
 
@@ -160,7 +175,7 @@ export class UserScheduler {
           };
 
     // Clamp scheduling window to plan limit
-    const limits = getPlanLimits(userRow?.plan ?? 'free');
+    const limits = getPlanLimits(isSelfHosted() ? 'pro' : (userRow?.plan ?? 'free'));
     this.cachedUserSettings = {
       ...parsed,
       schedulingWindowDays: Math.min(
@@ -168,15 +183,6 @@ export class UserScheduler {
         limits.schedulingWindowDays,
       ),
     };
-
-    this.cachedBufferConfig =
-      bufRows.length > 0
-        ? toBufConfig(bufRows[0])
-        : {
-            id: 'default',
-            ...DEFAULT_BUFFER_CONFIG,
-            applyDecompressionTo: DecompressionTarget.All,
-          };
 
     this.cachedCalIdToGoogleCalId = new Map(enabledCals.map((c) => [c.id, c.googleCalendarId]));
     this.hasWritableCalendar = enabledCals.some(
@@ -294,15 +300,18 @@ export class UserScheduler {
       await manager.syncAllNow();
     }
 
-    if (!this.cachedUserSettings || !this.cachedBufferConfig) {
+    if (!this.cachedUserSettings) {
       await this.refreshSettings();
     }
-    if (!this.cachedUserSettings || !this.cachedBufferConfig) {
+    if (!this.cachedUserSettings) {
       log.error({ userId }, 'Cannot reschedule: user settings unavailable');
       return 0;
     }
     const userSettings = this.cachedUserSettings;
-    const buf = this.cachedBufferConfig;
+    const buf: BufferConfigType = {
+      breakBetweenItemsMinutes:
+        userSettings.breakBetweenItemsMinutes ?? DEFAULT_BREAK_BETWEEN_MINUTES,
+    };
 
     if (!this.hasWritableCalendar) {
       broadcastToUser(userId, 'system_message', 'No writable calendar enabled', {
@@ -327,6 +336,15 @@ export class UserScheduler {
     const defaultHabitCalId = userSettings.defaultHabitCalendarId || null;
     const defaultTaskCalId = userSettings.defaultTaskCalendarId || null;
 
+    // Load habit completions to skip completed days
+    const completionRows = await db
+      .select({ habitId: habitCompletions.habitId, scheduledDate: habitCompletions.scheduledDate })
+      .from(habitCompletions)
+      .where(eq(habitCompletions.userId, this.userId));
+    const completedHabitDays = new Set(
+      completionRows.map((r) => `${r.habitId}__${r.scheduledDate}`),
+    );
+
     const result = await this.runSchedulingEngine(
       allHabits,
       allTasks,
@@ -335,10 +353,16 @@ export class UserScheduler {
       existingEvents,
       buf,
       userSettings,
+      completedHabitDays,
     );
 
     result.operations = this.filterTrivialUpdates(result.operations, existingEvents);
-    if (result.operations.length === 0) return 0;
+    if (result.operations.length === 0) {
+      // Even with no schedule changes, sync auto-complete jobs for all future habit events
+      // (handles server restart, Redis flush, or first run after schedule stabilizes)
+      await this.syncHabitAutoCompleteJobs(userSettings);
+      return 0;
+    }
 
     const existingEventsMap = buildExistingEventsMap(existingEvents);
     this.tagOperations(result.operations, allHabits, defaultHabitCalId, defaultTaskCalId);
@@ -352,6 +376,9 @@ export class UserScheduler {
     if (result.operations.length === 0) return 0;
 
     await this.persistOperations(result.operations, calClient, calIdToGoogleCalId);
+
+    // Sync auto-complete jobs for ALL future habit events (not just changed ones)
+    await this.syncHabitAutoCompleteJobs(userSettings);
 
     // Record changes after successful DB persist to avoid logging ops that failed
     const changes = await recordScheduleChanges(result.operations, existingEventsMap, userId);
@@ -385,6 +412,56 @@ export class UserScheduler {
       });
     }
     return result.operations.length;
+  }
+
+  /**
+   * Sync auto-complete jobs for ALL future habit events in the DB.
+   * Replaces the old approach of only registering jobs for changed operations.
+   * Handles server restarts, Redis flushes, and stable-schedule scenarios.
+   */
+  private async syncHabitAutoCompleteJobs(userSettings: UserSettings): Promise<void> {
+    if (userSettings.autoCompleteHabits === false) {
+      // Setting is off — cancel any existing jobs
+      await cancelAllForUser(this.userId).catch((err) =>
+        log.warn({ err, userId: this.userId }, 'Failed to cancel auto-complete jobs'),
+      );
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const futureHabitEvents = await db
+      .select({
+        itemId: scheduledEvents.itemId,
+        end: scheduledEvents.end,
+      })
+      .from(scheduledEvents)
+      .where(
+        and(
+          eq(scheduledEvents.userId, this.userId),
+          eq(scheduledEvents.itemType, 'habit'),
+          gt(scheduledEvents.end, now),
+        ),
+      );
+
+    const events = futureHabitEvents
+      .map((row) => {
+        const parts = row.itemId.split('__');
+        if (parts.length !== 2) return null;
+        return {
+          habitId: parts[0],
+          scheduledDate: parts[1],
+          endTimeUtcMs: new Date(row.end).getTime(),
+        };
+      })
+      .filter((e): e is NonNullable<typeof e> => e !== null);
+
+    if (events.length > 0) {
+      await registerBulkForUser(this.userId, events).catch((err) =>
+        log.warn({ err, userId: this.userId }, 'Failed to sync auto-complete jobs'),
+      );
+    }
+
+    log.debug({ userId: this.userId, count: events.length }, 'Synced auto-complete jobs');
   }
 
   /** Load all domain objects for the user. */
@@ -452,7 +529,11 @@ export class UserScheduler {
       itemType: row.itemType as ItemType,
       itemId: row.itemId,
       status: (row.status || 'free') as EventStatus,
-      calendarId: row.calendarId || 'primary',
+      location: null,
+      description: null,
+      calendarId: row.calendarId ?? null,
+      lastModifiedByUs: null,
+      googleUpdatedAt: null,
     }));
   }
 
@@ -541,7 +622,11 @@ export class UserScheduler {
         itemType: null,
         itemId: null,
         status: mode === 'locked' ? EventStatus.Locked : EventStatus.Busy,
+        location: row.location ?? null,
+        description: null,
         calendarId: row.calendarId,
+        lastModifiedByUs: null,
+        googleUpdatedAt: null,
       });
     }
   }
@@ -555,6 +640,7 @@ export class UserScheduler {
     existingEvents: CalendarEvent[],
     buf: BufferConfigType,
     userSettings: UserSettings,
+    completedHabitDays?: Set<string>,
   ): Promise<{ operations: CalendarOperation[]; unschedulable: unknown[] }> {
     const workerPool = getWorkerPool();
     if (workerPool) {
@@ -567,6 +653,7 @@ export class UserScheduler {
           calendarEvents: existingEvents,
           bufferConfig: buf,
           userSettings,
+          completedHabitDays: completedHabitDays ? [...completedHabitDays] : undefined,
         });
       } catch (err) {
         log.warn({ userId: this.userId, err }, 'Worker failed, falling back to main thread');
@@ -580,10 +667,12 @@ export class UserScheduler {
       existingEvents,
       buf,
       userSettings,
+      undefined,
+      completedHabitDays,
     );
   }
 
-  /** Filter out trivial updates (sub-threshold time changes). */
+  /** Filter out trivial updates (sub-threshold time changes with no status/title diff). */
   private filterTrivialUpdates(
     operations: CalendarOperation[],
     existingEvents: CalendarEvent[],
@@ -593,6 +682,8 @@ export class UserScheduler {
       if (op.type !== CalendarOpType.Update || !op.eventId) return true;
       const existing = existingMap.get(op.eventId);
       if (!existing) return true;
+      // Always keep updates that change status or title (e.g. locked → free)
+      if (existing.status !== op.status || existing.title !== op.title) return true;
       const startDiff = Math.abs(new Date(op.start).getTime() - new Date(existing.start).getTime());
       const endDiff = Math.abs(new Date(op.end).getTime() - new Date(existing.end).getTime());
       return startDiff >= MIN_SCHEDULE_CHANGE_MS || endDiff >= MIN_SCHEDULE_CHANGE_MS;
@@ -618,7 +709,7 @@ export class UserScheduler {
         } else if (op.itemType === ItemType.Task) {
           op.calendarId = defaultTaskCalId ?? undefined;
         } else {
-          op.calendarId = 'primary';
+          op.calendarId = undefined;
         }
       }
 
@@ -637,8 +728,9 @@ export class UserScheduler {
   ): Promise<CalendarOperation[]> {
     const opsByGoogleCal = new Map<string, CalendarOperation[]>();
     for (const op of operations) {
-      const isUuid = op.calendarId && op.calendarId !== 'primary';
-      const googleCalId = isUuid ? calIdToGoogleCalId.get(op.calendarId!) || 'primary' : 'primary';
+      const googleCalId = op.calendarId
+        ? calIdToGoogleCalId.get(op.calendarId) || 'primary'
+        : 'primary';
       const existingOps = opsByGoogleCal.get(googleCalId) || [];
       existingOps.push(op);
       opsByGoogleCal.set(googleCalId, existingOps);
@@ -666,7 +758,7 @@ export class UserScheduler {
   ): Promise<void> {
     const userId = this.userId;
     const nowTs = new Date().toISOString();
-    const orphanedGoogleEventIds: { googleEventId: string; calendarId: string }[] = [];
+    const orphanedGoogleEventIds: { googleEventId: string; calendarId: string | null }[] = [];
 
     // Pre-fetch existing events for Create ops to detect upserts and orphaned Google events
     const createItemIds = operations
@@ -699,16 +791,18 @@ export class UserScheduler {
       }
     }
 
+    type ItemTypeEnum = 'habit' | 'task' | 'meeting' | 'focus' | 'external';
+    type EventStatusEnum = 'free' | 'busy' | 'locked' | 'completed';
     const insertValues: Array<{
       userId: string;
-      itemType: string;
+      itemType: ItemTypeEnum;
       itemId: string;
       title: string;
       googleEventId: string | null;
-      calendarId: string;
+      calendarId: string | null;
       start: string;
       end: string;
-      status: string;
+      status: EventStatusEnum;
       alternativeSlotsCount: null;
       createdAt: string;
       updatedAt: string;
@@ -721,10 +815,10 @@ export class UserScheduler {
       if (op.type === CalendarOpType.Create) {
         const existing = existingByItemId.get(op.itemId);
         if (existing) {
-          if (existing.googleEventId && existing.googleEventId !== (op.googleEventId || null)) {
+          if (existing.googleEventId && existing.googleEventId !== (op.googleEventId ?? null)) {
             orphanedGoogleEventIds.push({
               googleEventId: existing.googleEventId,
-              calendarId: existing.calendarId || 'primary',
+              calendarId: existing.calendarId ?? null,
             });
           }
           upsertUpdates.push({ existing, op });
@@ -734,11 +828,11 @@ export class UserScheduler {
             itemType: op.itemType,
             itemId: op.itemId,
             title: op.title,
-            googleEventId: op.googleEventId || null,
-            calendarId: op.calendarId || 'primary',
+            googleEventId: op.googleEventId ?? null,
+            calendarId: op.calendarId ?? null,
             start: op.start,
             end: op.end,
-            status: op.status,
+            status: op.status as EventStatusEnum,
             alternativeSlotsCount: null,
             createdAt: nowTs,
             updatedAt: nowTs,
@@ -762,11 +856,11 @@ export class UserScheduler {
             .update(scheduledEvents)
             .set({
               title: op.title,
-              googleEventId: op.googleEventId || null,
-              calendarId: op.calendarId || 'primary',
+              googleEventId: op.googleEventId ?? null,
+              calendarId: op.calendarId || null,
               start: op.start,
               end: op.end,
-              status: op.status,
+              status: op.status as EventStatusEnum,
               updatedAt: nowTs,
             })
             .where(and(eq(scheduledEvents.id, existing.id), eq(scheduledEvents.userId, userId))),
@@ -778,7 +872,7 @@ export class UserScheduler {
               title: op.title,
               start: op.start,
               end: op.end,
-              status: op.status,
+              status: op.status as EventStatusEnum,
               googleEventId: op.googleEventId || undefined,
               updatedAt: nowTs,
             })
@@ -801,7 +895,7 @@ export class UserScheduler {
 
   /** Delete orphaned Google Calendar events that were replaced during dedup. */
   private async deleteOrphanedGoogleEvents(
-    orphanedGoogleEventIds: { googleEventId: string; calendarId: string }[],
+    orphanedGoogleEventIds: { googleEventId: string; calendarId: string | null }[],
     calClient: GoogleCalendarClient,
     calIdToGoogleCalId: Map<string, string>,
   ): Promise<void> {
@@ -814,8 +908,7 @@ export class UserScheduler {
     );
     for (const { googleEventId, calendarId: calId } of orphanedGoogleEventIds) {
       try {
-        const isUuid = calId && calId !== 'primary';
-        const googleCalId = isUuid ? calIdToGoogleCalId.get(calId) || 'primary' : 'primary';
+        const googleCalId = calId ? calIdToGoogleCalId.get(calId) || 'primary' : 'primary';
         await calClient.applyOperations(googleCalId, [
           {
             type: CalendarOpType.Delete,
@@ -1045,45 +1138,125 @@ export class UserScheduler {
 
     const local = scheduledByGoogleEventId.get(ev.googleEventId!);
     if (!local || !local.start || !local.end) {
-      // Not in our scheduledEvents — from another Fluxure instance
-      if (!ev.title) return 'skip';
-      return 'external';
+      // Orphaned Fluxure event — reclaim it into scheduled_events
+      if (!ev.title || !ev.start || !ev.end) return 'skip';
+      if (ev.itemType && ev.itemId) {
+        // ev.id is the fluxureId (e.g. "habitId__2026-03-24") which includes the
+        // date/chunk suffix.  ev.itemId is the base entity ID without the suffix.
+        // scheduled_events.itemId must use the full suffixed ID so that
+        // deduplicateRows treats each day's event as distinct; otherwise all
+        // orphaned events for the same entity collapse to one row and only one
+        // Google Calendar event gets deleted per force-sync cycle.
+        const fullItemId = ev.id || ev.itemId;
+        try {
+          await db
+            .insert(scheduledEvents)
+            .values({
+              userId,
+              itemType: ev.itemType,
+              itemId: fullItemId,
+              title: ev.title,
+              googleEventId: ev.googleEventId,
+              calendarId: null,
+              start: ev.start,
+              end: ev.end,
+              status: ev.status || EventStatus.Free,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoNothing();
+          log.info(
+            { userId, title: ev.title, itemId: fullItemId },
+            'Reclaimed orphaned Fluxure event',
+          );
+        } catch (err) {
+          log.warn(
+            { err, userId, googleEventId: ev.googleEventId },
+            'Failed to reclaim orphaned event',
+          );
+        }
+      }
+      return 'skip';
     }
 
     const startDiff = Math.abs(new Date(local.start).getTime() - new Date(ev.start).getTime());
     const endDiff = Math.abs(new Date(local.end).getTime() - new Date(ev.end).getTime());
-    if (startDiff < 60000 && endDiff < 60000) return 'skip';
+    const timesMatch = startDiff < 60000 && endDiff < 60000;
 
-    log.info({ userId, title: local.title }, 'Managed event moved');
+    // Check if status or title drifted (e.g. local says free but Google still shows locked)
+    const localStatus = (local as { status?: string | null }).status || EventStatus.Free;
+    const statusDrifted = ev.status !== localStatus;
+    const titleDrifted = ev.title !== local.title;
+
+    if (timesMatch && !statusDrifted && !titleDrifted) return 'skip';
+
+    // If times match but status/title drifted, check who is newer.
+    // If local is newer, push local state to Google (fix the drift).
+    // If Google is newer, accept Google's state.
+
+    // Conflict resolution: last-writer-wins across Fluxure and Google.
+    // Google's `updated` field reflects the last modification by ANY actor.
+    // Our `updatedAt` reflects the last local change. Newer timestamp wins.
+    const localRow = local as { updatedAt?: string | null };
+    const localUpdatedMs = localRow.updatedAt ? new Date(localRow.updatedAt).getTime() : 0;
+    const googleUpdatedMs = ev.googleUpdatedAt ? new Date(ev.googleUpdatedAt).getTime() : 0;
+
+    if (localUpdatedMs > googleUpdatedMs) {
+      // Local is newer — push local state to Google to fix the drift.
+      log.info(
+        {
+          userId,
+          title: local.title,
+          localUpdatedAt: localRow.updatedAt,
+          googleUpdatedAt: ev.googleUpdatedAt,
+        },
+        'Local state is newer than Google — pushing local to Google',
+      );
+      if (local.googleEventId) {
+        const googleCalId = local.calendarId
+          ? this.cachedCalIdToGoogleCalId.get(local.calendarId) || 'primary'
+          : 'primary';
+        const op: import('@fluxure/shared').CalendarOperation = {
+          type: CalendarOpType.Update,
+          eventId: local.id,
+          googleEventId: local.googleEventId,
+          itemType: (local.itemType || ItemType.Habit) as ItemType,
+          itemId: local.itemId || '',
+          title: local.title || '',
+          start: local.start || '',
+          end: local.end || '',
+          status: localStatus as EventStatus,
+          extendedProperties: {
+            [EXTENDED_PROPS.fluxureId]: local.id,
+            [EXTENDED_PROPS.itemType]: local.itemType || ItemType.Habit,
+            [EXTENDED_PROPS.itemId]: local.itemId?.split('__')[0] || '',
+            [EXTENDED_PROPS.status]: localStatus,
+          },
+        };
+        const failed = await this.calClient.applyOperations(googleCalId, [op]);
+        if (failed.length === 0) {
+          return 'moved'; // Triggers markAllWritten to skip the feedback loop
+        }
+        log.warn(
+          { userId, title: local.title },
+          'Failed to push local state to Google — will retry',
+        );
+      }
+      return 'skip';
+    }
+
+    // Google is newer — accept Google's state into local DB.
+    log.info({ userId, title: local.title }, 'Google state is newer — accepting into local DB');
     await db
       .update(scheduledEvents)
-      .set({ start: ev.start, end: ev.end, status: EventStatus.Locked, updatedAt: now })
-      .where(and(eq(scheduledEvents.id, local.id), eq(scheduledEvents.userId, userId)));
-
-    if (local.googleEventId) {
-      const calIsUuid = local.calendarId && local.calendarId !== 'primary';
-      const googleCalId = calIsUuid
-        ? this.cachedCalIdToGoogleCalId.get(local.calendarId!) || 'primary'
-        : 'primary';
-      const op: import('@fluxure/shared').CalendarOperation = {
-        type: CalendarOpType.Update,
-        eventId: local.id,
-        googleEventId: local.googleEventId,
-        itemType: (local.itemType || ItemType.Habit) as ItemType,
-        itemId: local.itemId || '',
-        title: local.title || '',
+      .set({
         start: ev.start,
         end: ev.end,
-        status: EventStatus.Locked,
-        extendedProperties: {
-          [EXTENDED_PROPS.fluxureId]: local.id,
-          [EXTENDED_PROPS.itemType]: local.itemType || ItemType.Habit,
-          [EXTENDED_PROPS.itemId]: local.itemId?.split('__')[0] || '',
-          [EXTENDED_PROPS.status]: EventStatus.Locked,
-        },
-      };
-      await this.calClient.applyOperations(googleCalId, [op]);
-    }
+        status: ev.status || EventStatus.Locked,
+        title: ev.title || local.title || '',
+        updatedAt: now,
+      })
+      .where(and(eq(scheduledEvents.id, local.id), eq(scheduledEvents.userId, userId)));
 
     return 'moved';
   }
@@ -1257,7 +1430,7 @@ export class SchedulerRegistry {
     // Events older than the default retention window are forgotten — Google Calendar keeps them.
     try {
       const defaultCutoff = new Date(
-        Date.now() - DEFAULT_PAST_EVENT_RETENTION_DAYS * MS_PER_DAY,
+        Date.now() - PAST_EVENT_RETENTION_DAYS * MS_PER_DAY,
       ).toISOString();
       let totalDeleted = 0;
       while (true) {
@@ -1285,9 +1458,9 @@ export class SchedulerRegistry {
       log.error({ err }, 'Past scheduled events cleanup failed');
     }
 
-    // Clean up old activity log entries (90 days)
+    // Clean up old activity log entries (180 days — matches data-retention.ts)
     try {
-      const ACTIVITY_LOG_RETENTION_DAYS = 90;
+      const ACTIVITY_LOG_RETENTION_DAYS = 180;
       const activityCutoff = new Date(
         Date.now() - ACTIVITY_LOG_RETENTION_DAYS * MS_PER_DAY,
       ).toISOString();
@@ -1345,14 +1518,19 @@ export class SchedulerRegistry {
       // Find scheduled events with an itemId whose base ID (before __)
       // doesn't match any existing entity
       let totalDeleted = 0;
-      let offset = 0;
+      let lastId = '';
       while (true) {
+        // Use cursor-based pagination (keyset) instead of OFFSET to avoid
+        // skipping rows when earlier rows are deleted mid-iteration.
         const batch = await db
           .select({ id: scheduledEvents.id, itemId: scheduledEvents.itemId })
           .from(scheduledEvents)
-          .limit(batchSize)
-          .offset(offset);
+          .where(lastId ? gt(scheduledEvents.id, lastId) : undefined)
+          .orderBy(asc(scheduledEvents.id))
+          .limit(batchSize);
         if (batch.length === 0) break;
+
+        lastId = batch[batch.length - 1].id;
 
         const orphanIds = batch
           .filter((row) => {
@@ -1368,7 +1546,6 @@ export class SchedulerRegistry {
         }
 
         if (batch.length < batchSize) break;
-        offset += batchSize;
         await new Promise((r) => setTimeout(r, batchPauseMs));
       }
 
@@ -1411,9 +1588,7 @@ export async function cleanupScheduleData(): Promise<void> {
   await db.delete(scheduleChanges).where(lt(scheduleChanges.createdAt, cutoff));
   log.info({ cutoff }, 'Schedule changes cleanup: deleted old rows');
 
-  const defaultCutoff = new Date(
-    Date.now() - DEFAULT_PAST_EVENT_RETENTION_DAYS * MS_PER_DAY,
-  ).toISOString();
+  const defaultCutoff = new Date(Date.now() - PAST_EVENT_RETENTION_DAYS * MS_PER_DAY).toISOString();
   await db.delete(scheduledEvents).where(lt(scheduledEvents.end, defaultCutoff));
   log.info('Past scheduled events cleanup: purged old rows');
 

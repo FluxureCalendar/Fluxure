@@ -21,25 +21,30 @@ const user = process.env.SMTP_USER;
 const pass = process.env.SMTP_PASS;
 const from = process.env.SMTP_FROM || `Fluxure <noreply@fluxure.app>`;
 
-if (!host || !user || !pass) {
-  console.error('Missing SMTP config. Set SMTP_HOST, SMTP_USER, SMTP_PASS in .env');
+if (!host) {
+  console.error('Missing SMTP config. Set SMTP_HOST in .env');
   process.exit(1);
 }
 
 console.log(`SMTP host:  ${host}:${port}`);
-console.log(`SMTP user:  ${user}`);
+console.log(`SMTP user:  ${user || '(none — no auth)'}`);
 console.log(`SMTP from:  ${from}`);
 console.log(`TLS/SSL:    ${port === 465 ? 'implicit (port 465)' : 'STARTTLS'}`);
 console.log('');
 
-const transporter = nodemailer.createTransport({
+const opts: Record<string, unknown> = {
   host,
   port,
   secure: port === 465,
-  auth: { user, pass },
   connectionTimeout: 10_000,
   greetingTimeout: 10_000,
-});
+};
+
+if (user && pass) {
+  opts.auth = { user, pass };
+}
+
+const transporter = nodemailer.createTransport(opts as nodemailer.TransportOptions);
 
 try {
   console.log('Verifying connection...');

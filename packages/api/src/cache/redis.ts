@@ -53,6 +53,7 @@ export async function initRedis(): Promise<void> {
     subscriberClient.on('error', (err) => {
       log.error({ err }, 'Subscriber connection error');
     });
+    await subscriberClient.connect();
   } catch (err) {
     log.warn({ err }, 'Failed to connect, using in-memory fallback');
     client = null;
@@ -110,6 +111,9 @@ export async function cacheSet(key: string, value: unknown, ttlSeconds: number):
   }
 
   if (fallbackMap) {
+    // Reject individual values larger than 1MB to prevent memory abuse
+    if (json.length > 1_048_576) return;
+
     // Evict oldest entries if at capacity
     if (fallbackMap.size >= FALLBACK_MAX_SIZE) {
       const evictCount = Math.floor(FALLBACK_MAX_SIZE * 0.1);
