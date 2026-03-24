@@ -1,6 +1,6 @@
 {
   "name": "@fluxure/web",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "private": true,
   "description": "SvelteKit PWA frontend for Fluxure — dashboard, scheduling UI, onboarding, and public booking",
   "license": "AGPL-3.0-only",
