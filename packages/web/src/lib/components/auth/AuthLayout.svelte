@@ -1,22 +1,28 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import { BRAND } from '@fluxure/shared';
-  import { resolve } from '$app/paths';
-  let { children } = $props();
+
+  let {
+    children,
+  }: {
+    children: Snippet;
+  } = $props();
 </script>
 
-<main class="auth-layout" aria-label="Authentication">
-  <div class="auth-card">
+<div class="auth-layout">
+  <div class="auth-wrapper">
     <div class="auth-logo">
-      <span class="sidebar-logo">F</span>
-      <span class="auth-brand">{BRAND.name}</span>
+      <img src="/logo-mark.svg" alt="" width="32" height="32" />
+      <span>fluxure</span>
     </div>
-    {@render children()}
+    <div class="auth-card">
+      {@render children()}
+    </div>
+    <div class="auth-footer">
+      &copy; {new Date().getFullYear()} Fluxure &middot;
+      <a href="{BRAND.landingUrl}/privacy" target="_blank" rel="noopener noreferrer">Privacy</a>
+      &middot;
+      <a href="{BRAND.landingUrl}/terms" target="_blank" rel="noopener noreferrer">Terms</a>
+    </div>
   </div>
-  <footer class="auth-footer">
-    <span>&copy; {new Date().getFullYear()} {BRAND.name}</span>
-    &middot;
-    <a href={resolve('/privacy')}>Privacy</a>
-    &middot;
-    <a href={resolve('/terms')}>Terms</a>
-  </footer>
-</main>
+</div>

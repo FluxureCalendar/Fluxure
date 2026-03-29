@@ -1,48 +1,60 @@
 <script lang="ts">
-  import { TIME_TICK_INTERVAL_MS } from '@fluxure/shared';
+  import { onMount } from 'svelte';
 
-  let { getPosition }: { getPosition: () => number } = $props();
+  let {
+    startHour = 0,
+    hourHeight = 60,
+  }: {
+    startHour?: number;
+    hourHeight?: number;
+  } = $props();
 
-  // Isolated tick — only this component re-renders every 60s
-  let timeTick = $state(0);
+  let now = $state(new Date());
 
-  $effect(() => {
+  onMount(() => {
     const interval = setInterval(() => {
-      timeTick++;
-    }, TIME_TICK_INTERVAL_MS);
+      now = new Date();
+    }, 60_000);
     return () => clearInterval(interval);
   });
 
-  let position = $derived.by(() => {
-    void timeTick;
-    return getPosition();
-  });
+  let hours = $derived(now.getHours() + now.getMinutes() / 60 - startHour);
+  let visible = $derived(hours >= 0 && hours <= 24);
+  let top = $derived(visible ? hours * hourHeight : 0);
 </script>
 
-{#if position >= 0}
-  <div class="current-time-line" style="top: {position}px;">
-    <div class="current-time-dot"></div>
+{#if visible}
+  <div class="time-indicator" style:top="{top}px">
+    <div class="time-dot"></div>
+    <div class="time-line"></div>
   </div>
 {/if}
 
 <style lang="scss">
-  .current-time-line {
+  .time-indicator {
     position: absolute;
     left: 0;
     right: 0;
-    height: 0;
-    border-top: 2px solid var(--color-accent);
-    z-index: 20;
+    z-index: 5;
     pointer-events: none;
+    display: flex;
+    align-items: center;
   }
 
-  .current-time-dot {
-    position: absolute;
-    left: -4px;
-    top: -5px;
-    width: 8px;
-    height: 8px;
-    border-radius: var(--radius-full);
+  .time-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
     background: var(--color-accent);
+    flex-shrink: 0;
+    margin-left: -3px;
+    opacity: 0.8;
+  }
+
+  .time-line {
+    flex: 1;
+    height: 1px;
+    background: var(--color-accent);
+    opacity: 0.5;
   }
 </style>
