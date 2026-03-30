@@ -1,6 +1,6 @@
 {
   "name": "@fluxure/shared",
-  "version": "1.0.26",
+  "version": "1.0.27",
   "description": "Shared types, enums, constants, and natural language parser for Fluxure",
   "license": "AGPL-3.0-only",
   "author": {

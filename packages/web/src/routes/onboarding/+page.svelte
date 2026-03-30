@@ -1,624 +1,953 @@
 <script lang="ts">
-  import { pageTitle } from '$lib/brand';
   import { goto } from '$app/navigation';
-  import { resolve } from '$app/paths';
-  import { page } from '$app/state';
+  import { onMount } from 'svelte';
+  import { getAuthState, checkAuth } from '$lib/auth.svelte';
+  import { googleAuth } from '$lib/auth.svelte';
+  import { settings, habits, calendars as calendarsApi } from '$lib/api';
+  import { loadCalendars, getCalendars, setCalendars } from '$lib/calendars.svelte';
+  import { showToast } from '$lib/toast.svelte';
+  import { pageTitle } from '$lib/brand';
+  import { formatDuration } from '$lib/utils/format';
+  import { Priority } from '@fluxure/shared';
+  import type { DayOfWeek } from '@fluxure/shared';
+  import CheckCircle from 'lucide-svelte/icons/check-circle';
+  import Calendar from 'lucide-svelte/icons/calendar';
+  import Clock from 'lucide-svelte/icons/clock';
+  import Sparkles from 'lucide-svelte/icons/sparkles';
+  import AlertCircle from 'lucide-svelte/icons/alert-circle';
+  import type { Calendar as CalendarType } from '@fluxure/shared';
+  import { CalendarMode } from '@fluxure/shared';
 
-  import { SvelteMap } from 'svelte/reactivity';
-  import { onMount, tick } from 'svelte';
-  import { groupTimezones } from '$lib/utils/timezone';
-  import { getAuthState, googleAuth, isValidGoogleOAuthUrl, checkAuth } from '$lib/auth.svelte';
-  import {
-    settings as settingsApi,
-    habits as habitsApi,
-    calendars as calendarsApi,
-  } from '$lib/api';
-  import { Frequency, CalendarMode } from '@fluxure/shared';
-  import type { Calendar } from '@fluxure/shared';
-  import GoogleLogo from '$lib/components/auth/GoogleLogo.svelte';
-  import CalendarIcon from 'lucide-svelte/icons/calendar';
-  import Check from 'lucide-svelte/icons/check';
-  import ChevronLeft from 'lucide-svelte/icons/chevron-left';
-  import ChevronRight from 'lucide-svelte/icons/chevron-right';
-  import ArrowRight from 'lucide-svelte/icons/arrow-right';
-  import Lock from 'lucide-svelte/icons/lock';
-  import RefreshCw from 'lucide-svelte/icons/refresh-cw';
-  import Dumbbell from 'lucide-svelte/icons/dumbbell';
-  import BookOpen from 'lucide-svelte/icons/book-open';
-  import Brain from 'lucide-svelte/icons/brain';
-  import ClipboardList from 'lucide-svelte/icons/clipboard-list';
-  import Languages from 'lucide-svelte/icons/languages';
+  const TOTAL_STEPS = 5;
 
-  const TOTAL_STEPS = 6;
+  let step = $state(1);
+  let loading = $state(false);
 
-  // Initialize at step 0; URL ?step= param is applied after auth verification in onMount
-  let currentStep = $state(0);
-  let stepKey = $state(0);
-  let stepDirection = $state<'forward' | 'back'>('forward');
-  let wizardBodyEl = $state<HTMLElement | undefined>(undefined);
-
-  $effect(() => {
-    // Track stepKey to trigger focus when step changes
-    void stepKey;
-    tick().then(() => {
-      const heading = wizardBodyEl?.querySelector<HTMLElement>('h1, h2');
-      if (heading) {
-        heading.tabIndex = -1;
-        heading.focus();
-      }
-    });
-  });
-
-  // Step 1: Calendar connection
+  // Step 2: Connect Calendar
+  let calendarChecking = $state(true); // starts true to prevent flash
   let calendarConnected = $state(false);
+  let calendarError = $state('');
+  let calendarList = $state<CalendarType[]>([]);
 
-  // Step 2: Calendar selection
-  let calendarList = $state<Calendar[]>([]);
-  let discoveringCalendars = $state(false);
-  let calendarsLoaded = $state(false);
-
-  async function discoverCalendars() {
-    discoveringCalendars = true;
-    try {
-      calendarList = await calendarsApi.discover();
-      calendarsLoaded = true;
-    } catch {
-      // ignore
-    } finally {
-      discoveringCalendars = false;
-    }
-  }
-
-  async function loadCalendars() {
-    try {
-      calendarList = await calendarsApi.list();
-      calendarsLoaded = calendarList.length > 0;
-      if (!calendarsLoaded) {
-        await discoverCalendars();
-      }
-    } catch {
-      await discoverCalendars();
-    }
-  }
-
-  /** At least one writable calendar must remain enabled */
-  function wouldRemoveLastWritable(cal: Calendar): boolean {
-    const writableCount = calendarList.filter(
-      (c: Calendar) => c.enabled && c.mode === 'writable' && c.id !== cal.id,
-    ).length;
-    // If this calendar is currently enabled+writable and it's the only one, block
-    return cal.enabled && cal.mode === 'writable' && writableCount === 0;
-  }
-
-  // Track calendar changes locally (no API calls during onboarding)
-  let calendarChanges = new SvelteMap<string, { enabled?: boolean; mode?: CalendarMode }>();
-
-  function toggleCalendar(cal: Calendar) {
-    const existing = calendarChanges.get(cal.id) ?? {};
-    const newEnabled = !(existing.enabled ?? cal.enabled);
-    calendarChanges.set(cal.id, { ...existing, enabled: newEnabled });
-
-    // Update local display state instantly
-    calendarList = calendarList.map((c: Calendar) =>
-      c.id === cal.id ? { ...c, enabled: newEnabled } : c,
-    );
-  }
-
-  function setCalendarMode(cal: Calendar, mode: CalendarMode) {
-    const existing = calendarChanges.get(cal.id) ?? {};
-    calendarChanges.set(cal.id, { ...existing, mode });
-
-    calendarList = calendarList.map((c: Calendar) => (c.id === cal.id ? { ...c, mode } : c));
-  }
-
-  onMount(async () => {
-    // Auth guard: redirect to login if not authenticated
-    const auth = getAuthState();
-    if (!auth.isAuthenticated && !auth.isLoading) {
-      goto(resolve('/login'));
-      return;
-    }
-    if (auth.isLoading) {
-      const { checkAuth } = await import('$lib/auth.svelte');
-      const user = await checkAuth();
-      if (!user) {
-        goto(resolve('/login'));
-        return;
-      }
-    }
-
-    // Apply URL step parameter only after auth verification
-    const resumeStep = page.url.searchParams.get('step');
-    if (resumeStep) {
-      const parsed = Math.max(0, Math.min(parseInt(resumeStep, 10) || 0, TOTAL_STEPS - 1));
-      currentStep = parsed;
-    }
-
-    try {
-      const status = await settingsApi.getGoogleStatus();
-      calendarConnected = status.connected;
-      // Skip welcome + connect steps if already connected via Google sign-in
-      if (calendarConnected && currentStep < 2) {
-        currentStep = 2;
-        stepKey += 1;
-      }
-      // Auto-discover calendars when landing on or skipping to the calendar step
-      if (calendarConnected && currentStep === 2 && !calendarsLoaded) {
-        loadCalendars();
-      }
-    } catch {
-      // ignore
-    }
-  });
-
-  // Step 3: Working hours
+  // Step 3: Working Hours
   let workStart = $state('09:00');
   let workEnd = $state('17:00');
-  let timezone = $state(Intl.DateTimeFormat().resolvedOptions().timeZone);
 
-  // Step 4: First habit
+  // Step 4: First Habit
   let habitName = $state('');
   let habitDuration = $state(30);
-  let habitFrequency = $state('daily');
-  let selectedSuggestion = $state('');
-  let gdprConsent: boolean = $state(false);
+  let habitIdealTime = $state('09:00');
+  let habitFrequency = $state<'daily' | 'weekdays' | 'weekends'>('daily');
 
-  const suggestions = [
-    { name: 'Morning workout', icon: Dumbbell, duration: 45, frequency: 'daily' },
-    { name: 'Read', icon: BookOpen, duration: 30, frequency: 'daily' },
-    { name: 'Meditate', icon: Brain, duration: 15, frequency: 'daily' },
-    { name: 'Plan my day', icon: ClipboardList, duration: 15, frequency: 'weekdays' },
-    { name: 'Learn a language', icon: Languages, duration: 30, frequency: '3x_week' },
-  ];
+  function getDaysForFreq(freq: 'daily' | 'weekdays' | 'weekends'): { days: DayOfWeek[] } {
+    if (freq === 'weekdays') return { days: ['mon', 'tue', 'wed', 'thu', 'fri'] };
+    if (freq === 'weekends') return { days: ['sat', 'sun'] };
+    return { days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] };
+  }
 
-  const timezoneGroups = groupTimezones();
+  const authState = getAuthState();
 
-  let canProceed = $derived(
-    currentStep === 0
-      ? true
-      : currentStep === 1
-        ? true // calendar is optional
-        : currentStep === 2
-          ? true // calendar selection is optional
-          : currentStep === 3
-            ? workStart < workEnd // String comparison works for HH:MM format (e.g., "09:00" < "17:00")
-            : currentStep === 4
-              ? habitName.trim().length > 0
-              : currentStep === 5
-                ? gdprConsent
-                : true,
+  onMount(async () => {
+    const user = await checkAuth();
+    if (!user) {
+      goto('/login');
+    } else if (user.onboardingCompleted) {
+      goto('/');
+    }
+  });
+
+  // Time helpers
+  function timeToMins(t: string): number {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + (m || 0);
+  }
+
+  function minsToTime(mins: number): string {
+    const clamped = Math.max(0, mins >= 1440 ? 1439 : mins);
+    return `${String(Math.floor(clamped / 60)).padStart(2, '0')}:${String(clamped % 60).padStart(2, '0')}`;
+  }
+
+  function timeToPercent(t: string): number {
+    const mins = timeToMins(t);
+    if (mins >= 1439) return 100;
+    return (mins / 1440) * 100;
+  }
+
+  function formatTimeLabel(t: string): string {
+    const mins = timeToMins(t);
+    if (mins >= 1439) return '12 AM';
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    return m === 0 ? `${h12} ${suffix}` : `${h12}:${String(m).padStart(2, '0')} ${suffix}`;
+  }
+
+  function hoursBetween(start: string, end: string): string {
+    let endMins = timeToMins(end);
+    if (endMins === 1439) endMins = 1440;
+    const diff = endMins - timeToMins(start);
+    if (diff <= 0) return '0h';
+    const h = Math.floor(diff / 60);
+    const m = diff % 60;
+    return m ? `${h}h ${m}m` : `${h}h`;
+  }
+
+  function snapToSlot(mins: number): number {
+    return Math.round(mins / 30) * 30;
+  }
+
+  // Drag state
+  let dragging: {
+    mode: 'start' | 'end' | 'slide';
+    trackEl: HTMLElement;
+    slideOffset: number;
+  } | null = $state(null);
+
+  function handleThumbDown(e: PointerEvent, mode: 'start' | 'end') {
+    e.stopPropagation();
+    const track = (e.currentTarget as HTMLElement).parentElement!;
+    dragging = { mode, trackEl: track, slideOffset: 0 };
+    track.setPointerCapture(e.pointerId);
+    document.body.classList.add('dragging-range');
+  }
+
+  function handleFillDown(e: PointerEvent) {
+    e.stopPropagation();
+    const track = (e.currentTarget as HTMLElement).parentElement!;
+    const rect = track.getBoundingClientRect();
+    const clickMins = ((e.clientX - rect.left) / rect.width) * 1440;
+    dragging = { mode: 'slide', trackEl: track, slideOffset: clickMins - timeToMins(workStart) };
+    track.setPointerCapture(e.pointerId);
+    document.body.classList.add('dragging-range');
+  }
+
+  function handleRangeMove(e: PointerEvent) {
+    if (!dragging) return;
+    const rect = dragging.trackEl.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const rawMins = pct * 1440;
+    const curStart = timeToMins(workStart);
+    const rawEnd = timeToMins(workEnd);
+    const curEnd = rawEnd === 1439 ? 1440 : rawEnd;
+    const duration = curEnd - curStart;
+
+    if (dragging.mode === 'start') {
+      const snapped = Math.max(0, Math.min(curEnd - 30, snapToSlot(rawMins)));
+      workStart = minsToTime(snapped);
+    } else if (dragging.mode === 'end') {
+      const snapped = Math.max(curStart + 30, Math.min(1440, snapToSlot(rawMins)));
+      workEnd = minsToTime(snapped);
+    } else {
+      const newStart = snapToSlot(rawMins - dragging.slideOffset);
+      const maxStart = duration >= 1410 ? 0 : 1440 - duration;
+      const clamped = Math.max(0, Math.min(maxStart, newStart));
+      workStart = minsToTime(clamped);
+      workEnd = minsToTime(clamped + duration);
+    }
+  }
+
+  function handleRangeUp() {
+    dragging = null;
+    document.body.classList.remove('dragging-range');
+  }
+
+  // Validation
+  let workHoursValid = $derived(
+    timeToMins(workEnd) > timeToMins(workStart) &&
+      timeToMins(workEnd) - timeToMins(workStart) >= 30,
   );
-
-  let stepCtaLabel = $derived(
-    currentStep === 0
-      ? "Let's go"
-      : currentStep === 1
-        ? calendarConnected
-          ? 'Continue'
-          : 'Skip for now'
-        : currentStep === 2
-          ? 'Continue'
-          : currentStep === 3
-            ? 'Continue'
-            : currentStep === 4
-              ? 'Create habit'
-              : 'Continue',
+  let workHoursError = $derived(
+    timeToMins(workEnd) <= timeToMins(workStart)
+      ? 'End time must be after start time'
+      : timeToMins(workEnd) - timeToMins(workStart) < 30
+        ? 'Window must be at least 30 minutes'
+        : '',
   );
-
-  function selectSuggestion(s: (typeof suggestions)[number]) {
-    selectedSuggestion = s.name;
-    habitName = s.name;
-    habitDuration = s.duration;
-    habitFrequency = s.frequency;
-  }
-
-  function nextStep() {
-    // Load calendars when entering the calendar selection step
-    if (currentStep === 1 && calendarConnected && !calendarsLoaded) {
-      loadCalendars();
-    }
-
-    if (currentStep < TOTAL_STEPS - 1) {
-      stepDirection = 'forward';
-      currentStep += 1;
-      stepKey += 1;
-    }
-  }
-
-  function prevStep() {
-    const minStep = calendarConnected ? 2 : 0;
-    if (currentStep > minStep) {
-      stepDirection = 'back';
-      currentStep -= 1;
-      stepKey += 1;
-    }
-  }
-
-  let saving = $state(false);
-  let showToast = $state(false);
-  let toastMsg = $state('');
-
-  async function completeOnboarding() {
-    saving = true;
-    try {
-      // Batch-save all onboarding data at once
-      const saves: Promise<unknown>[] = [];
-
-      // 1. Save calendar enable/mode changes
-      for (const [calId, changes] of calendarChanges) {
-        saves.push(
-          calendarsApi.update(calId, changes).catch(() => {
-            showToast = true;
-            toastMsg = 'Some settings could not be saved';
-          }),
-        );
-      }
-
-      // 2. Save working hours + timezone
-      saves.push(
-        settingsApi
-          .update({
-            workingHours: { start: workStart, end: workEnd },
-            timezone,
-          })
-          .catch(() => {
-            showToast = true;
-            toastMsg = 'Some settings could not be saved';
-          }),
-      );
-
-      // 3. Create first habit (if specified)
-      if (habitName.trim()) {
-        const daysMap: Record<string, string[]> = {
-          daily: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
-          weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'],
-          '3x_week': ['mon', 'wed', 'fri'],
-        };
-        saves.push(
-          habitsApi
-            .create({
-              name: habitName.trim(),
-              durationMin: habitDuration,
-              durationMax: habitDuration,
-              frequency: Frequency.Daily,
-              frequencyConfig: { days: daysMap[habitFrequency] ?? daysMap.weekdays },
-              priority: 2,
-              windowStart: '06:00',
-              windowEnd: '12:00',
-              idealTime: '08:00',
-            })
-            .catch(() => {
-              showToast = true;
-              toastMsg = 'Some settings could not be saved';
-            }),
-        );
-      }
-
-      // Fire all saves in parallel, then mark onboarding complete
-      await Promise.all(saves);
-      await settingsApi.completeOnboarding();
-      // Refresh JWT so onboardingCompleted flag is updated
-      await checkAuth();
-    } catch {
-      // Continue to dashboard even if API calls fail
-    } finally {
-      saving = false;
-    }
-  }
-
-  async function skipOnboarding() {
-    await completeOnboarding();
-    goto(resolve('/'));
-  }
-
-  async function goToDashboard() {
-    await completeOnboarding();
-    goto(resolve('/'));
-  }
 
   async function connectGoogle() {
-    // Check if already connected via the existing Google OAuth flow
+    loading = true;
     try {
-      const response = await settingsApi.connectGoogle();
-      if (response.redirectUrl && isValidGoogleOAuthUrl(response.redirectUrl)) {
-        window.location.href = response.redirectUrl;
-      } else if (response.redirectUrl) {
-        throw new Error('Invalid OAuth redirect URL');
+      await googleAuth('consent');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to connect Google', 'error');
+      loading = false;
+    }
+  }
+
+  async function checkCalendarConnection() {
+    calendarChecking = true;
+    calendarError = '';
+    try {
+      const status = await settings.getGoogleStatus();
+      if (status.connected) {
+        // Has refresh token — try discovering calendars
+        let cals = await loadCalendars(true);
+        if (cals.length === 0) {
+          cals = await calendarsApi.discover();
+        }
+        calendarList = cals;
+        calendarConnected = cals.length > 0;
+        if (!calendarConnected) {
+          calendarError = 'Connected to Google but no calendars found. Try reconnecting.';
+        }
+      } else {
+        // No refresh token — need calendar permission
+        calendarConnected = false;
       }
+    } catch (err) {
+      calendarConnected = false;
+      calendarError = 'Could not check calendar access. Please try connecting below.';
+    } finally {
+      calendarChecking = false;
+    }
+  }
+
+  // Track calendar changes locally — no API calls until completion
+  let calendarChanges = $state<Map<string, { enabled?: boolean; mode?: CalendarMode }>>(new Map());
+
+  function toggleCalendar(cal: CalendarType) {
+    if (cal.isPrimary) return;
+    const newEnabled = !cal.enabled;
+    calendarList = calendarList.map((c) => (c.id === cal.id ? { ...c, enabled: newEnabled } : c));
+    const existing = calendarChanges.get(cal.id) ?? {};
+    calendarChanges.set(cal.id, { ...existing, enabled: newEnabled });
+  }
+
+  function setCalendarMode(cal: CalendarType, mode: CalendarMode) {
+    calendarList = calendarList.map((c) => (c.id === cal.id ? { ...c, mode } : c));
+    const existing = calendarChanges.get(cal.id) ?? {};
+    calendarChanges.set(cal.id, { ...existing, mode });
+  }
+
+  $effect(() => {
+    if (step === 2) {
+      checkCalendarConnection();
+    }
+  });
+
+  async function completeOnboarding() {
+    loading = true;
+    try {
+      // Batch all changes in one go at the end
+
+      // 1. Save working hours + browser timezone
+      await settings.update({
+        workingHours: { start: workStart, end: workEnd },
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
+
+      // 2. Apply calendar changes
+      for (const [calId, changes] of calendarChanges) {
+        await calendarsApi.update(calId, changes).catch(() => {});
+      }
+
+      // 3. Create first habit (if provided)
+      if (habitName.trim()) {
+        await habits
+          .create({
+            name: habitName.trim(),
+            durationMin: habitDuration,
+            durationMax: habitDuration,
+            idealTime: habitIdealTime,
+            windowStart: workStart,
+            windowEnd: workEnd,
+            ...getDaysForFreq(habitFrequency),
+            priority: Priority.Medium,
+            color: '#5BAD8A',
+          })
+          .catch(() => {});
+      }
+
+      // 4. Mark onboarding complete
+      await settings.completeOnboarding();
+      await checkAuth();
+      await goto('/');
     } catch {
-      // fallback
-      return googleAuth();
+      await goto('/');
+    } finally {
+      loading = false;
     }
   }
 </script>
+
+<svelte:window onpointermove={handleRangeMove} onpointerup={handleRangeUp} />
 
 <svelte:head>
   <title>{pageTitle('Get started')}</title>
 </svelte:head>
 
-<div class="wizard">
-  <div class="wizard-header">
-    <span class="sidebar-logo">F</span>
-    <div class="wizard-progress" role="group" aria-label="Onboarding progress">
-      <span class="sr-only">Step {currentStep + 1} of {TOTAL_STEPS}</span>
+<div class="onboarding-layout">
+  <div class="onboarding-container">
+    <div class="onboarding-step-indicator">
       {#each Array(TOTAL_STEPS) as _, i (i)}
         <div
-          class="wizard-dot"
-          class:active={i === currentStep}
-          class:completed={i < currentStep}
-          aria-hidden="true"
+          class="onboarding-dot"
+          class:onboarding-dot-active={i + 1 === step}
+          class:onboarding-dot-done={i + 1 < step}
         ></div>
-        {#if i < TOTAL_STEPS - 1}
-          <div class="wizard-track" class:filled={i < currentStep} aria-hidden="true"></div>
-        {/if}
       {/each}
     </div>
-    <button class="wizard-skip" onclick={skipOnboarding} disabled={saving}> Skip </button>
-  </div>
 
-  <div class="wizard-body" bind:this={wizardBodyEl}>
-    {#key stepKey}
-      <div class="wizard-step" class:wizard-step--back={stepDirection === 'back'}>
-        {#if currentStep === 0}
-          <!-- Step 1: Welcome -->
-          <div class="wizard-welcome">
-            <div class="wizard-welcome-icon">
-              <CalendarIcon size={32} />
-            </div>
-            <h1>Welcome to Fluxure</h1>
-            <p>
-              Fluxure automatically places your habits, tasks, and focus time on your calendar -- so
-              you can stop planning and start doing.
-            </p>
-            <p class="wizard-welcome-time">This takes about 2 minutes.</p>
+    <div class="onboarding-card">
+      {#if step === 1}
+        <div class="onboarding-step">
+          <Sparkles size={36} class="onboarding-icon" />
+          <h2 class="onboarding-title">Welcome to Fluxure</h2>
+          <p class="onboarding-description">
+            Let's set up your account in a few quick steps. We'll connect your calendar, configure
+            your working hours, and help you create your first habit.
+          </p>
+          <div class="onboarding-actions">
+            <button class="btn-primary" onclick={() => (step = 2)}>Get started</button>
           </div>
-        {:else if currentStep === 1}
-          <!-- Step 2: Connect Calendar -->
-          <div class="wizard-calendar">
-            <h2>Connect your calendar</h2>
-            <p>
-              Fluxure needs access to your Google Calendar to read events and schedule new ones.
+        </div>
+      {:else if step === 2}
+        <div class="onboarding-step">
+          <Calendar size={36} class="onboarding-icon" />
+
+          {#if calendarChecking}
+            <h2 class="onboarding-title">Checking calendar access...</h2>
+            <p class="onboarding-description">Looking for your Google calendars.</p>
+          {:else if calendarConnected}
+            <h2 class="onboarding-title">Your calendars</h2>
+            <p class="onboarding-description">
+              Choose which calendars Fluxure should read from when scheduling. Your primary calendar
+              is always active.
             </p>
 
-            {#if !calendarConnected}
-              <button
-                class="auth-btn-social wizard-google-btn"
-                onclick={connectGoogle}
-                type="button"
-              >
-                <GoogleLogo />
-                Connect Google Calendar
-              </button>
-              <p class="wizard-privacy-note">
-                <Lock size={14} />
-                We only read and create events. We never share your data.
-              </p>
-            {:else}
-              <div class="wizard-success-card">
-                <Check size={20} />
-                <span>Google Calendar connected</span>
-              </div>
-            {/if}
-          </div>
-        {:else if currentStep === 2}
-          <!-- Step 3: Choose Calendars -->
-          <div class="wizard-calendars">
-            <h2>Choose your calendars</h2>
-            <p>Select which calendars Fluxure can see and schedule on.</p>
-
-            {#if !calendarConnected}
-              <p class="text-hint">Connect Google Calendar first to manage your calendars.</p>
-            {:else if discoveringCalendars}
-              <div class="wizard-calendars-loading">
-                <RefreshCw size={18} class="spinning" />
-                <span>Discovering your calendars...</span>
-              </div>
-            {:else if calendarList.length === 0}
-              <p class="text-hint">No calendars found.</p>
-              <button class="wizard-btn-refresh" onclick={discoverCalendars} type="button">
-                <RefreshCw size={14} />
-                Discover calendars
-              </button>
-            {:else}
-              <div class="wizard-cal-table">
-                {#each calendarList as cal, i (cal.id)}
-                  <div class="cal-row" class:cal-row--bordered={i > 0}>
-                    <div class="cal-info">
-                      <span class="cal-dot" style:background={cal.color ?? 'var(--color-accent)'}
-                      ></span>
-                      <span class="cal-name">{cal.name}</span>
+            <div class="calendar-list-onboarding">
+              {#each calendarList as cal (cal.id)}
+                <div class="calendar-row-onboarding" class:calendar-disabled={!cal.enabled}>
+                  <div class="calendar-left">
+                    <span class="calendar-dot" style:background-color={cal.color}></span>
+                    <div class="calendar-text">
+                      <span class="calendar-name">{cal.name}</span>
                       {#if cal.isPrimary}
-                        <span class="cal-primary-badge">Primary</span>
-                      {/if}
-                    </div>
-                    <div class="cal-actions">
-                      {#if cal.isPrimary}
-                        <span class="cal-always-on">Always on</span>
-                      {:else}
-                        {#if cal.enabled}
-                          <select
-                            value={cal.mode}
-                            onchange={(e) =>
-                              setCalendarMode(cal, e.currentTarget.value as CalendarMode)}
-                            aria-label={`Mode for ${cal.name}`}
-                            class="cal-mode-select"
-                          >
-                            <option value="writable">Writable</option>
-                            <option value="locked">Locked</option>
-                          </select>
-                        {/if}
-                        <button
-                          onclick={() => toggleCalendar(cal)}
-                          role="switch"
-                          aria-checked={cal.enabled}
-                          aria-label="Toggle {cal.name}"
-                          class="toggle-switch"
-                          class:toggle-switch--on={cal.enabled}
-                          disabled={wouldRemoveLastWritable(cal)}
-                          title={wouldRemoveLastWritable(cal)
-                            ? 'At least one writable calendar is required'
-                            : ''}
-                        >
-                          <span
-                            class="toggle-switch-knob"
-                            class:toggle-switch-knob--on={cal.enabled}
-                          ></span>
-                        </button>
+                        <span class="calendar-badge">Primary · Always on</span>
+                      {:else if cal.enabled}
+                        <span class="calendar-mode-label">
+                          {cal.mode === CalendarMode.Writable ? 'Writable' : 'Read-only'}
+                        </span>
                       {/if}
                     </div>
                   </div>
-                {/each}
-              </div>
-              <p class="wizard-cal-hint">
-                <strong>Writable</strong> = Fluxure can create events. <strong>Locked</strong> = read-only,
-                used to avoid conflicts.
-              </p>
-            {/if}
-          </div>
-        {:else if currentStep === 3}
-          <!-- Step 4: Working Hours -->
-          <div class="wizard-hours">
-            <h2>Set your working hours</h2>
-            <p>Tell us when you're available so we schedule around your real life.</p>
-
-            <div class="wizard-hours-grid">
-              <div class="form-field">
-                <label for="wiz-work-start">Work starts</label>
-                <input id="wiz-work-start" type="time" bind:value={workStart} class="font-mono" />
-              </div>
-              <div class="form-field">
-                <label for="wiz-work-end">Work ends</label>
-                <input id="wiz-work-end" type="time" bind:value={workEnd} class="font-mono" />
-              </div>
-            </div>
-
-            <div class="form-field" style="margin-top: var(--space-4);">
-              <label for="wiz-timezone">Timezone</label>
-              <select id="wiz-timezone" bind:value={timezone}>
-                {#each timezoneGroups as group (group.label)}
-                  <optgroup label={group.label}>
-                    {#each group.zones as tz (tz)}
-                      <option value={tz}>{tz.replace(/_/g, ' ')}</option>
-                    {/each}
-                  </optgroup>
-                {/each}
-              </select>
-            </div>
-          </div>
-        {:else if currentStep === 4}
-          <!-- Step 5: First Habit -->
-          <div class="wizard-habit">
-            <h2>Create your first habit</h2>
-            <p>Pick something you want to do regularly. Fluxure will find time for it.</p>
-
-            <div class="wizard-habit-suggestions">
-              {#each suggestions as s (s.name)}
-                <button
-                  class="wizard-habit-chip"
-                  class:selected={selectedSuggestion === s.name}
-                  onclick={() => selectSuggestion(s)}
-                  type="button"
-                >
-                  <s.icon size={16} />
-                  {s.name}
-                </button>
+                  <div class="calendar-controls">
+                    {#if cal.enabled && !cal.isPrimary}
+                      <select
+                        class="mode-select"
+                        value={cal.mode}
+                        onchange={(e) =>
+                          setCalendarMode(
+                            cal,
+                            (e.target as HTMLSelectElement).value as CalendarMode,
+                          )}
+                        aria-label="Mode for {cal.name}"
+                      >
+                        <option value={CalendarMode.Writable}>Writable</option>
+                        <option value={CalendarMode.Locked}>Read-only</option>
+                      </select>
+                    {/if}
+                    {#if cal.isPrimary}
+                      <span class="calendar-always-on">Always on</span>
+                    {:else}
+                      <button
+                        class="toggle-switch"
+                        class:toggle-on={cal.enabled}
+                        onclick={() => toggleCalendar(cal)}
+                        role="switch"
+                        aria-checked={cal.enabled}
+                        aria-label="Toggle {cal.name}"
+                      ></button>
+                    {/if}
+                  </div>
+                </div>
               {/each}
             </div>
 
-            <div class="auth-form">
-              <div class="auth-field">
-                <label for="wiz-habit-name">Habit name</label>
-                <div class="auth-input-wrap">
+            <div class="calendar-mode-hint">
+              <p><strong>Writable</strong> — Fluxure can create and move events on this calendar</p>
+              <p>
+                <strong>Read-only</strong> — Fluxure reads events but won't modify this calendar
+              </p>
+            </div>
+
+            <div class="onboarding-actions">
+              <button class="btn-primary" onclick={() => (step = 3)}>Continue</button>
+            </div>
+          {:else}
+            <!-- Not connected or error -->
+            {#if calendarError}
+              <h2 class="onboarding-title">Calendar access needed</h2>
+              <div class="calendar-error">
+                <AlertCircle size={16} />
+                <span>{calendarError}</span>
+              </div>
+            {:else}
+              <h2 class="onboarding-title">Connect your calendar</h2>
+              <p class="onboarding-description">
+                Grant calendar access so Fluxure can find the best times for your habits, tasks, and
+                focus time.
+              </p>
+            {/if}
+            <div class="onboarding-actions">
+              <button class="btn-primary" onclick={connectGoogle} disabled={loading}>
+                {loading
+                  ? 'Connecting...'
+                  : calendarError
+                    ? 'Reconnect Google Calendar'
+                    : 'Connect Google Calendar'}
+              </button>
+            </div>
+            <button class="onboarding-skip" onclick={() => (step = 3)}> Skip for now </button>
+          {/if}
+        </div>
+      {:else if step === 3}
+        <div class="onboarding-step">
+          <Clock size={36} class="onboarding-icon" />
+          <h2 class="onboarding-title">Working hours</h2>
+          <p class="onboarding-description">
+            Drag the handles or slide the bar to set your schedule.
+          </p>
+
+          <div class="onboarding-form">
+            <div class="range-block">
+              <div class="range-track">
+                <div
+                  class="range-fill"
+                  role="presentation"
+                  style="left: {timeToPercent(workStart)}%; width: {timeToPercent(workEnd) -
+                    timeToPercent(workStart)}%"
+                  onpointerdown={handleFillDown}
+                >
+                  <span class="range-duration">{hoursBetween(workStart, workEnd)}</span>
+                </div>
+                <div
+                  class="range-handle"
+                  role="slider"
+                  tabindex="0"
+                  aria-label="Working hours start"
+                  aria-valuemin={0}
+                  aria-valuemax={1440}
+                  aria-valuenow={timeToMins(workStart)}
+                  aria-valuetext={formatTimeLabel(workStart)}
+                  style="left: {timeToPercent(workStart)}%"
+                  onpointerdown={(e) => handleThumbDown(e, 'start')}
+                >
+                  <span class="range-time-label">{formatTimeLabel(workStart)}</span>
+                </div>
+                <div
+                  class="range-handle"
+                  role="slider"
+                  tabindex="0"
+                  aria-label="Working hours end"
+                  aria-valuemin={0}
+                  aria-valuemax={1440}
+                  aria-valuenow={timeToMins(workEnd)}
+                  aria-valuetext={formatTimeLabel(workEnd)}
+                  style="left: {timeToPercent(workEnd)}%"
+                  onpointerdown={(e) => handleThumbDown(e, 'end')}
+                >
+                  <span class="range-time-label">{formatTimeLabel(workEnd)}</span>
+                </div>
+              </div>
+              <div class="range-labels">
+                <span>12am</span><span>6am</span><span>12pm</span><span>6pm</span><span>12am</span>
+              </div>
+            </div>
+
+            {#if workHoursError}
+              <p class="hours-error">{workHoursError}</p>
+            {/if}
+          </div>
+
+          <div class="onboarding-actions">
+            <button class="btn-secondary" onclick={() => (step = 2)}>Back</button>
+            <button class="btn-primary" onclick={() => (step = 4)} disabled={!workHoursValid}>
+              Continue
+            </button>
+          </div>
+        </div>
+      {:else if step === 4}
+        <div class="onboarding-step">
+          <h2 class="onboarding-title">Create your first habit</h2>
+          <p class="onboarding-description">What's something you'd like to do regularly?</p>
+
+          <div class="onboarding-form">
+            <div class="form-field">
+              <input
+                id="habit-name"
+                class="form-input habit-name-input"
+                type="text"
+                bind:value={habitName}
+                placeholder="e.g., Morning exercise, Read, Meditate"
+                aria-label="Habit name"
+              />
+            </div>
+
+            {#if habitName.trim()}
+              <div class="habit-option-row habit-stagger-1">
+                <span class="habit-option-label">How long?</span>
+                <div class="habit-duration-control">
                   <input
-                    id="wiz-habit-name"
-                    type="text"
-                    bind:value={habitName}
-                    placeholder="e.g., Morning workout"
+                    type="range"
+                    class="habit-range"
+                    min="10"
+                    max="120"
+                    step="5"
+                    bind:value={habitDuration}
+                    aria-label="Duration"
                   />
+                  <span class="habit-duration-value">{formatDuration(habitDuration)}</span>
                 </div>
               </div>
 
-              <div class="form-row">
-                <div class="form-field">
-                  <label for="wiz-habit-duration">Duration</label>
-                  <select id="wiz-habit-duration" bind:value={habitDuration}>
-                    <option value={15}>15 min</option>
-                    <option value={30}>30 min</option>
-                    <option value={45}>45 min</option>
-                    <option value={60}>1 hour</option>
-                  </select>
-                </div>
-                <div class="form-field">
-                  <label for="wiz-habit-frequency">Frequency</label>
-                  <select id="wiz-habit-frequency" bind:value={habitFrequency}>
-                    <option value="daily">Daily</option>
-                    <option value="weekdays">Weekdays</option>
-                    <option value="3x_week">3x / week</option>
-                  </select>
+              <div class="habit-option-row habit-stagger-2">
+                <span class="habit-option-label">Best time?</span>
+                <input
+                  type="time"
+                  class="form-input habit-time-input"
+                  bind:value={habitIdealTime}
+                  aria-label="Preferred time"
+                />
+              </div>
+
+              <div class="habit-option-row habit-stagger-3">
+                <span class="habit-option-label">How often?</span>
+                <div class="habit-freq-pills">
+                  <button
+                    class="freq-pill"
+                    class:freq-active={habitFrequency === 'daily'}
+                    onclick={() => (habitFrequency = 'daily')}>Every day</button
+                  >
+                  <button
+                    class="freq-pill"
+                    class:freq-active={habitFrequency === 'weekdays'}
+                    onclick={() => (habitFrequency = 'weekdays')}>Weekdays</button
+                  >
+                  <button
+                    class="freq-pill"
+                    class:freq-active={habitFrequency === 'weekends'}
+                    onclick={() => (habitFrequency = 'weekends')}>Weekends</button
+                  >
                 </div>
               </div>
-            </div>
+
+              <p class="habit-hint habit-stagger-4">
+                You can fine-tune priority, color, and scheduling windows in the app.
+              </p>
+            {/if}
           </div>
-        {:else}
-          <!-- Step 6: All Set -->
-          <div class="wizard-complete">
-            <div class="wizard-complete-icon">
-              <Check size={32} />
-            </div>
-            <h1>You're all set!</h1>
-            <p>
-              Fluxure is now managing your calendar. Your first habit will appear on your schedule
-              shortly.
+
+          <div class="onboarding-actions">
+            <button class="btn-secondary" onclick={() => (step = 3)}>Back</button>
+            <button class="btn-primary" onclick={() => (step = 5)}>
+              {habitName.trim() ? 'Continue' : 'Skip'}
+            </button>
+          </div>
+        </div>
+      {:else if step === 5}
+        <div class="onboarding-step">
+          <div class="onboarding-complete">
+            <CheckCircle size={48} class="complete-icon" />
+            <h2 class="onboarding-title">You're all set</h2>
+            <p class="onboarding-description">
+              Your account is ready. Fluxure will now optimize your schedule automatically.
             </p>
-            <div class="wizard-consent">
-              <input type="checkbox" id="gdpr-consent" bind:checked={gdprConsent} />
-              <label for="gdpr-consent"
-                >I agree to the <a
-                  href={resolve('/privacy')}
-                  target="_blank"
-                  rel="noopener noreferrer">Privacy Policy</a
-                > and consent to Fluxure processing my calendar data as described.</label
-              >
-            </div>
           </div>
-        {/if}
-      </div>
-    {/key}
-  </div>
-
-  <div class="wizard-footer">
-    {#if currentStep > (calendarConnected ? 2 : 0) && currentStep < TOTAL_STEPS - 1}
-      <button class="wizard-btn-back" onclick={prevStep} type="button">
-        <ChevronLeft size={16} />
-        Back
-      </button>
-    {:else}
-      <div></div>
-    {/if}
-
-    {#if currentStep < TOTAL_STEPS - 1}
-      <button class="wizard-btn-next" onclick={nextStep} disabled={!canProceed} type="button">
-        {stepCtaLabel}
-        <ChevronRight size={16} />
-      </button>
-    {:else}
-      <button class="wizard-btn-next" onclick={goToDashboard} disabled={saving} type="button">
-        {saving ? 'Saving...' : 'Open Fluxure'}
-        {#if !saving}<ArrowRight size={16} />{/if}
-      </button>
-    {/if}
+          <div class="onboarding-actions">
+            <button class="btn-primary" onclick={completeOnboarding} disabled={loading}>
+              {loading ? 'Loading...' : 'Go to dashboard'}
+            </button>
+          </div>
+        </div>
+      {/if}
+    </div>
   </div>
 </div>
 
-{#if showToast}
-  <div class="onboarding-toast" role="alert">
-    {toastMsg}
-    <button
-      class="onboarding-toast-close"
-      onclick={() => {
-        showToast = false;
-      }}
-      aria-label="Dismiss">&times;</button
-    >
-  </div>
-{/if}
+<style lang="scss">
+  @use '$lib/styles/variables' as *;
+  @use '$lib/styles/mixins' as *;
+
+  :global(.onboarding-icon) {
+    color: var(--color-accent);
+    margin-bottom: var(--space-4);
+  }
+
+  .calendar-list-onboarding {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    text-align: left;
+    margin-bottom: var(--space-2);
+  }
+
+  .calendar-row-onboarding {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3) 0;
+    transition: opacity var(--transition-fast);
+
+    & + & {
+      border-top: 1px solid var(--color-separator);
+    }
+
+    &.calendar-disabled {
+      opacity: 0.4;
+    }
+  }
+
+  .calendar-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    flex: 1;
+  }
+
+  .calendar-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .calendar-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+  }
+
+  .calendar-mode-label {
+    font-size: 0.625rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .calendar-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .calendar-name {
+    font-size: 0.8125rem;
+    color: var(--color-text);
+    @include text-truncate;
+  }
+
+  .calendar-badge {
+    font-size: 0.625rem;
+    font-weight: 500;
+    color: var(--color-accent);
+    background: var(--color-accent-muted);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+  }
+
+  .calendar-always-on {
+    font-size: 0.6875rem;
+    color: var(--color-success);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .calendar-error {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-warning-muted);
+    color: var(--color-warning);
+    border-radius: var(--radius-md);
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    margin-bottom: var(--space-4);
+    text-align: left;
+
+    :global(svg) {
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+  }
+
+  .mode-select {
+    appearance: none;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%236B8898' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 4px center;
+    background-size: 10px 8px;
+    color: var(--color-text-secondary);
+    font-family: inherit;
+    font-size: 0.6875rem;
+    padding: 2px var(--space-4) 2px var(--space-2);
+    height: 24px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color var(--transition-fast);
+
+    &:focus {
+      border-color: var(--color-accent);
+    }
+  }
+
+  .calendar-mode-hint {
+    text-align: left;
+    font-size: 0.6875rem;
+    color: var(--color-text-tertiary);
+    line-height: 1.5;
+    padding: var(--space-3);
+    background: var(--color-surface-sunken);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-2);
+
+    p + p {
+      margin-top: var(--space-1);
+    }
+
+    strong {
+      color: var(--color-text-secondary);
+      font-weight: 500;
+    }
+  }
+
+  :global(body.dragging-range),
+  :global(body.dragging-range *) {
+    cursor: grabbing !important;
+  }
+
+  // ---- Draggable time range ----
+  .range-block {
+    @include flex-col(var(--space-1));
+    user-select: none;
+    padding-top: var(--space-6);
+  }
+
+  .range-track {
+    position: relative;
+    height: 32px;
+    background: var(--color-surface-hover);
+    border-radius: var(--radius-md);
+    touch-action: none;
+  }
+
+  .range-fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-radius: var(--radius-md);
+    background: var(--color-accent-muted);
+    border: 1px solid var(--color-accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+
+    &:active {
+      cursor: grabbing;
+    }
+  }
+
+  .range-duration {
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: var(--color-accent);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .range-handle {
+    position: absolute;
+    top: 50%;
+    width: 18px;
+    height: 18px;
+    transform: translate(-50%, -50%);
+    cursor: ew-resize;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    &::after {
+      content: '';
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--color-surface);
+      border: 2px solid var(--color-accent);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+      transition: transform var(--transition-fast);
+    }
+
+    &:hover::after {
+      transform: scale(1.2);
+    }
+  }
+
+  .range-time-label {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    font-size: 0.5625rem;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .range-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.5625rem;
+    color: var(--color-text-tertiary);
+    padding: 0 1px;
+  }
+
+  // ---- Habit step ----
+  .habit-name-input {
+    text-align: center;
+    font-size: 1rem;
+    font-weight: 500;
+    height: 40px;
+  }
+
+  .habit-option-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) 0;
+    gap: var(--space-3);
+    border-top: 1px solid var(--color-separator);
+    animation: fadeSlideIn 300ms ease-out both;
+  }
+
+  .habit-stagger-1 {
+    animation-delay: 0ms;
+  }
+  .habit-stagger-2 {
+    animation-delay: 80ms;
+  }
+  .habit-stagger-3 {
+    animation-delay: 160ms;
+  }
+  .habit-stagger-4 {
+    animation-delay: 240ms;
+  }
+
+  .habit-hint {
+    text-align: center;
+    font-size: 0.6875rem;
+    color: var(--color-text-tertiary);
+    padding: var(--space-2) 0;
+    animation: fadeSlideIn 300ms ease-out both;
+    border-top: none;
+  }
+
+  .habit-option-label {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+    min-width: 80px;
+  }
+
+  .habit-duration-control {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex: 1;
+    justify-content: flex-end;
+  }
+
+  .habit-range {
+    width: 120px;
+    height: 4px;
+    appearance: none;
+    background: var(--color-surface-hover);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+
+    &::-webkit-slider-thumb {
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--color-accent);
+      border: 2px solid var(--color-surface);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+      cursor: pointer;
+    }
+
+    &::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--color-accent);
+      border: 2px solid var(--color-surface);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+      cursor: pointer;
+    }
+  }
+
+  .habit-duration-value {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--color-text);
+    font-variant-numeric: tabular-nums;
+    min-width: 36px;
+    text-align: right;
+  }
+
+  .habit-time-input {
+    width: 100px;
+    text-align: center;
+    font-size: 0.8125rem;
+    height: 28px;
+    padding: 0 var(--space-2);
+  }
+
+  .habit-freq-pills {
+    display: flex;
+    gap: 2px;
+    background: var(--color-surface-hover);
+    border-radius: var(--radius-md);
+    padding: 2px;
+  }
+
+  .freq-pill {
+    padding: 3px var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-tertiary);
+    font-family: inherit;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    white-space: nowrap;
+
+    &:hover {
+      color: var(--color-text-secondary);
+    }
+  }
+
+  .freq-active {
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .hours-error {
+    text-align: center;
+    font-size: 0.75rem;
+    color: var(--color-danger);
+    margin-top: var(--space-1);
+  }
+</style>

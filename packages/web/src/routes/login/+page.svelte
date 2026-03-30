@@ -1,81 +1,124 @@
 <script lang="ts">
-  import { pageTitle, APP_NAME } from '$lib/brand';
-  import { resolve } from '$app/paths';
-  import { page } from '$app/state';
-  import { onMount } from 'svelte';
-  import { googleAuth } from '$lib/auth.svelte';
+  import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import AuthLayout from '$lib/components/auth/AuthLayout.svelte';
   import GoogleLogo from '$lib/components/auth/GoogleLogo.svelte';
-  import Loader from 'lucide-svelte/icons/loader';
-
-  const oauthErrors: Record<string, string> = {
-    oauth_failed: 'Google sign-in failed. Please try again.',
-    missing_code: 'Google sign-in was cancelled or failed.',
-    auth_failed: 'Authentication failed. Please try again.',
-    invalid_state: 'Google sign-in expired. Please try again.',
-    state_expired: 'Google sign-in expired. Please try again.',
-    no_email: 'Could not retrieve email from Google account.',
-  };
+  import { googleAuth, getAuthState } from '$lib/auth.svelte';
+  import { pageTitle } from '$lib/brand';
+  import { BRAND } from '@fluxure/shared';
 
   let googleLoading = $state(false);
-  let loginError = $state(oauthErrors[page.url.searchParams.get('error') ?? ''] ?? '');
+  let error = $state('');
+  let oauthParamsHandled = $state(false);
 
-  // If redirected back because prompt=none failed, retry with account picker
-  // If redirected back because refresh token is missing, retry with consent
-  onMount(() => {
-    if (page.url.searchParams.get('google_consent') === '1') {
-      googleAuth('consent');
-    } else if (page.url.searchParams.get('google_retry') === '1') {
-      googleAuth('select_account');
+  const authState = getAuthState();
+
+  // Handle OAuth error params from URL (runs once on mount)
+  $effect(() => {
+    if (oauthParamsHandled) return;
+    const params = $page.url.searchParams;
+    const oauthError = params.get('error');
+    const googleConsent = params.get('google_consent');
+    const googleRetry = params.get('google_retry');
+
+    // Only process if there are relevant params
+    if (!oauthError && !googleConsent && !googleRetry) return;
+
+    oauthParamsHandled = true;
+
+    if (oauthError === 'oauth_failed') {
+      error = 'Google sign-in failed. Please try again.';
+    } else if (oauthError === 'missing_code') {
+      error = 'Authorization was incomplete. Please try again.';
+    }
+
+    // Handle google_consent and google_retry — clear params first to prevent
+    // redirect loops if OAuth fails and returns back to /login with same params
+    if (googleConsent === 'required' || googleRetry === 'true') {
+      const clean = new URL(window.location.href);
+      clean.searchParams.delete('google_consent');
+      clean.searchParams.delete('google_retry');
+      window.history.replaceState({}, '', clean.pathname + clean.search);
+      handleGoogleAuth('consent');
     }
   });
 
-  async function handleGoogleSignIn() {
-    if (googleLoading) return;
+  // Redirect if already authenticated
+  $effect(() => {
+    if (authState.isAuthenticated && authState.user) {
+      if (!authState.user.onboardingCompleted) {
+        goto('/onboarding');
+      } else {
+        goto('/');
+      }
+    }
+  });
+
+  async function handleGoogleAuth(prompt?: 'select_account' | 'consent') {
+    error = '';
     googleLoading = true;
-    loginError = '';
+
     try {
-      await googleAuth();
-    } catch {
+      await googleAuth(prompt);
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Google sign-in failed.';
       googleLoading = false;
-      loginError = 'Failed to start Google sign-in. Please try again.';
     }
   }
 </script>
 
 <svelte:head>
-  <title>{pageTitle('Sign in')}</title>
+  <title>{pageTitle('Sign In')}</title>
 </svelte:head>
 
 <AuthLayout>
-  <h1 class="auth-title">Welcome back</h1>
-  <p class="auth-subtitle">Sign in to your {APP_NAME} account.</p>
+  <h2 class="auth-title">Welcome back</h2>
+  <p class="auth-subtitle">Sign in to your Fluxure account</p>
 
-  {#if loginError}
-    <div class="alert-error" role="alert">{loginError}</div>
+  {#if error}
+    <div class="auth-error">{error}</div>
   {/if}
 
-  <button
-    class="auth-btn-social"
-    onclick={handleGoogleSignIn}
-    type="button"
-    disabled={googleLoading}
-  >
-    {#if googleLoading}
-      <Loader size={18} class="spin" />
-      Redirecting to Google...
-    {:else}
-      <GoogleLogo />
-      Continue with Google
-    {/if}
+  <button class="auth-social-btn" onclick={() => handleGoogleAuth()} disabled={googleLoading}>
+    <GoogleLogo />
+    {googleLoading ? 'Redirecting...' : 'Continue with Google'}
   </button>
 
-  <p class="auth-privacy">
-    By signing in, you agree to our <a
-      href={resolve('/privacy')}
-      class="auth-link"
-      target="_blank"
-      rel="noopener noreferrer">Privacy Policy</a
-    >.
+  <p class="auth-footer">
+    Don't have an account? <a href="/signup">Sign up</a>
   </p>
 </AuthLayout>
+
+<style lang="scss">
+  .auth-subtitle {
+    text-align: center;
+    color: var(--color-text-tertiary);
+    font-size: 0.875rem;
+    margin-bottom: var(--space-8);
+  }
+
+  .auth-error {
+    padding: var(--space-3);
+    color: var(--color-danger);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    margin-bottom: var(--space-4);
+    text-align: center;
+  }
+
+  .auth-footer {
+    text-align: center;
+    font-size: 0.8125rem;
+    color: var(--color-text-tertiary);
+    margin-top: var(--space-6);
+
+    a {
+      color: var(--color-accent);
+      text-decoration: none;
+      font-weight: 500;
+      &:hover {
+        text-decoration: underline;
+      }
+    }
+  }
+</style>

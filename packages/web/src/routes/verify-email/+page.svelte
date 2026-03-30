@@ -1,154 +1,200 @@
 <script lang="ts">
-  import { pageTitle } from '$lib/brand';
-  import { page } from '$app/state';
-  import { goto } from '$app/navigation';
-  import { resolve } from '$app/paths';
-  import { onMount } from 'svelte';
-  import { verifyEmail, resendVerification } from '$lib/auth.svelte';
+  import { page } from '$app/stores';
   import AuthLayout from '$lib/components/auth/AuthLayout.svelte';
+  import { verifyEmail, resendVerification } from '$lib/auth.svelte';
+  import { showToast } from '$lib/toast.svelte';
+  import { pageTitle } from '$lib/brand';
+  import CheckCircle from 'lucide-svelte/icons/check-circle';
+  import AlertCircle from 'lucide-svelte/icons/alert-circle';
   import Mail from 'lucide-svelte/icons/mail';
-  import Check from 'lucide-svelte/icons/check';
 
-  let email = $derived(page.url.searchParams.get('email') ?? '');
-  let token = $derived(page.url.searchParams.get('token') ?? '');
-  let manualEmail = $state('');
-  let verifying = $state(false);
-  let verified = $state(false);
-  let verifyError = $state('');
-  let resendCooldown = $state(0);
-  let resendTimer: ReturnType<typeof setInterval> | undefined;
-  let redirectTimer: ReturnType<typeof setTimeout> | undefined;
+  let status = $state<'verifying' | 'success' | 'error' | 'pending'>('pending');
+  let errorMessage = $state('');
+  let resendEmail = $state('');
+  let resendLoading = $state(false);
+  let resendSent = $state(false);
 
-  onMount(() => {
-    // Email/password auth disabled — redirect to login (Google OAuth only)
-    if (!token) {
-      goto(resolve('/login'), { replaceState: true });
-      return;
+  // Auto-verify if token in URL — use a guard to prevent duplicate calls
+  // when the $effect re-runs due to $page reactivity changes.
+  let verifiedToken = '';
+  $effect(() => {
+    const token = $page.url.searchParams.get('token');
+    if (token && token !== verifiedToken) {
+      verifiedToken = token;
+      handleVerify(token);
     }
-    // Still allow token verification for users who received emails before disable
-    handleVerify();
-    return () => {
-      if (resendTimer) clearInterval(resendTimer);
-      if (redirectTimer) clearTimeout(redirectTimer);
-    };
   });
 
-  async function handleVerify() {
-    verifying = true;
-    verifyError = '';
+  async function handleVerify(token: string) {
+    status = 'verifying';
+
     try {
       await verifyEmail(token);
-      verified = true;
-      redirectTimer = setTimeout(() => goto(resolve('/onboarding')), 2000);
+      status = 'success';
     } catch (err) {
-      verifyError = err instanceof Error ? err.message : 'Verification failed.';
-    } finally {
-      verifying = false;
+      status = 'error';
+      errorMessage = err instanceof Error ? err.message : 'Verification failed.';
     }
   }
 
-  let resendTarget = $derived(email || manualEmail);
+  async function handleResend() {
+    if (!resendEmail) return;
+    resendLoading = true;
 
-  async function resendEmail() {
-    if (resendCooldown > 0 || !resendTarget) return;
     try {
-      await resendVerification(resendTarget);
-      resendCooldown = 60;
-      resendTimer = setInterval(() => {
-        resendCooldown -= 1;
-        if (resendCooldown <= 0 && resendTimer) {
-          clearInterval(resendTimer);
-          resendTimer = undefined;
-        }
-      }, 1000);
+      await resendVerification(resendEmail);
+      resendSent = true;
+      showToast('Verification email sent', 'success');
     } catch (err) {
-      verifyError = err instanceof Error ? err.message : 'Failed to resend verification email.';
+      showToast(err instanceof Error ? err.message : 'Failed to resend email', 'error');
+    } finally {
+      resendLoading = false;
     }
   }
 </script>
 
 <svelte:head>
-  <title>{pageTitle('Verify email')}</title>
+  <title>{pageTitle('Verify Email')}</title>
 </svelte:head>
 
 <AuthLayout>
-  {#if verified}
-    <div class="verify-content">
-      <div class="verify-icon-wrap">
-        <div class="verify-circle">
-          <Check size={28} />
-        </div>
-      </div>
-      <h1 class="auth-title">Email verified!</h1>
-      <p class="auth-subtitle">Redirecting you to get started...</p>
+  {#if status === 'verifying'}
+    <div class="auth-message">
+      <div class="spinner"></div>
+      <p>Verifying your email...</p>
     </div>
-  {:else if verifying}
-    <div class="verify-content">
-      <h1 class="auth-title">Verifying your email...</h1>
-      <p class="auth-subtitle">Please wait a moment.</p>
+  {:else if status === 'success'}
+    <div class="auth-message">
+      <CheckCircle size={40} class="icon-success" />
+      <h2 class="auth-title">Email verified</h2>
+      <p>Your email has been verified successfully.</p>
+      <a href="/login" class="btn-primary continue-btn">Continue to sign in</a>
     </div>
-  {:else if verifyError}
-    <div class="verify-content">
-      <h1 class="auth-title">Verification failed</h1>
-      <p class="auth-subtitle">{verifyError}</p>
-      <div class="verify-actions">
-        <a href={resolve('/login')} class="auth-link">Back to sign in</a>
+  {:else if status === 'error'}
+    <div class="auth-message">
+      <AlertCircle size={40} class="icon-error" />
+      <h2 class="auth-title">Verification failed</h2>
+      <p>{errorMessage}</p>
+      <p class="hint">The link may have expired. Request a new verification email below.</p>
+    </div>
+
+    <form
+      class="resend-form"
+      onsubmit={(e) => {
+        e.preventDefault();
+        handleResend();
+      }}
+    >
+      <div class="form-field">
+        <label class="form-label" for="resend-email">Email address</label>
+        <input
+          id="resend-email"
+          class="form-input"
+          type="email"
+          bind:value={resendEmail}
+          placeholder="you@example.com"
+          required
+        />
       </div>
+      <button class="btn-secondary resend-btn" type="submit" disabled={resendLoading || resendSent}>
+        {resendSent ? 'Email sent' : resendLoading ? 'Sending...' : 'Resend verification email'}
+      </button>
+    </form>
+
+    <div class="auth-links">
+      <a href="/login">Back to sign in</a>
     </div>
   {:else}
-    <div class="verify-content">
-      <div class="verify-icon-wrap">
-        <div class="verify-circle">
-          <Mail size={28} />
-        </div>
-        <div class="verify-ring"></div>
-      </div>
-
-      <h1 class="auth-title">Check your email</h1>
-      <p class="auth-subtitle">
-        We sent a verification link to<br />
-        {#if email}
-          <strong class="verify-email">{email}</strong>
-        {:else}
-          <strong class="verify-email">your email address</strong>
-        {/if}
+    <div class="auth-message">
+      <Mail size={40} class="icon-accent" />
+      <h2 class="auth-title">Check your email</h2>
+      <p>
+        We sent a verification link to your email address. Click the link to verify your account.
       </p>
+    </div>
 
-      <div class="verify-instructions">
-        <p>Click the link in the email to verify your account.</p>
-        <p class="verify-spam">Don't see it? Check your spam folder.</p>
+    <form
+      class="resend-form"
+      onsubmit={(e) => {
+        e.preventDefault();
+        handleResend();
+      }}
+    >
+      <p class="resend-hint">Didn't receive the email?</p>
+      <div class="form-field">
+        <input
+          class="form-input"
+          type="email"
+          bind:value={resendEmail}
+          placeholder="Enter your email to resend"
+          required
+        />
       </div>
+      <button class="btn-secondary resend-btn" type="submit" disabled={resendLoading || resendSent}>
+        {resendSent ? 'Email sent' : resendLoading ? 'Sending...' : 'Resend verification email'}
+      </button>
+    </form>
 
-      {#if !email}
-        <div class="auth-field">
-          <label for="manual-email">Enter your email to resend the verification link:</label>
-          <div class="auth-input-wrap">
-            <Mail size={18} class="auth-input-icon" />
-            <input
-              id="manual-email"
-              type="email"
-              placeholder="your@email.com"
-              bind:value={manualEmail}
-              autocomplete="email"
-            />
-          </div>
-        </div>
-      {/if}
-
-      <div class="verify-actions">
-        <button
-          class="auth-btn-primary"
-          onclick={resendEmail}
-          disabled={resendCooldown > 0 || !resendTarget}
-        >
-          {#if resendCooldown > 0}
-            Resend in {resendCooldown}s
-          {:else}
-            Resend verification email
-          {/if}
-        </button>
-        <a href={resolve('/login')} class="auth-link">Back to sign in</a>
-      </div>
+    <div class="auth-links">
+      <a href="/login">Back to sign in</a>
     </div>
   {/if}
 </AuthLayout>
+
+<style lang="scss">
+  @use '$lib/styles/mixins' as *;
+
+  :global(.icon-success) {
+    color: var(--color-success);
+  }
+
+  :global(.icon-error) {
+    color: var(--color-danger);
+  }
+
+  :global(.icon-accent) {
+    color: var(--color-accent);
+  }
+
+  .spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--color-border);
+    border-top-color: var(--color-accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .hint {
+    font-size: 0.8125rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .continue-btn {
+    text-decoration: none;
+    padding: var(--space-2) var(--space-6);
+  }
+
+  .resend-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+  }
+
+  .resend-hint {
+    font-size: 0.875rem;
+    color: var(--color-text-secondary);
+    text-align: center;
+  }
+
+  .resend-btn {
+    width: 100%;
+  }
+</style>
