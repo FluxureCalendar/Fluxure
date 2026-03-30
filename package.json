@@ -82,7 +82,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@vitest/coverage-v8": "^4.1.0",
+    "@vitest/coverage-v8": "^4.1.2",
     "dotenv": "^17.3.1",
     "eslint": "^10.1.0",
     "eslint-plugin-svelte": "^3.16.0",
@@ -95,7 +95,7 @@
     "prettier-plugin-svelte": "^3.5.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.57.1",
-    "vitest": "^4.1.0"
+    "typescript-eslint": "^8.57.2",
+    "vitest": "^4.1.2"
   }
 }
