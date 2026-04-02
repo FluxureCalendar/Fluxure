@@ -1,711 +1,424 @@
 <script lang="ts">
-  import type { SchedulingTemplate } from '$lib/api';
-  import type { UserConfig } from '@fluxure/shared';
-  import {
-    SchedulingHours,
-    COLOR_PALETTE,
-    COLOR_NAMES,
-    DEFAULT_HABIT_DURATION_MIN,
-    DEFAULT_HABIT_DURATION_MAX,
-    format as formatDate,
-    subDays,
-  } from '@fluxure/shared';
-  import type { Habit, HabitCompletion, Calendar } from '@fluxure/shared';
-  import { getScheduleDropdownValue } from '$lib/utils/scheduling-dropdown';
-  import Flame from 'lucide-svelte/icons/flame';
-  import CircleCheck from 'lucide-svelte/icons/circle-check';
+  import { onMount } from 'svelte';
+  import { fly, fade } from 'svelte/transition';
+  import type { Habit, DayOfWeek } from '@fluxure/shared';
+  import { SchedulingHours, Priority } from '@fluxure/shared';
+  import { habits } from '$lib/api';
+  import { showToast } from '$lib/toast.svelte';
+  import { createSchedulingTemplateState } from '$lib/scheduling-templates.svelte';
+  import { getCachedSettings } from '$lib/cache.svelte';
+  import TimeRangeSlider from '$lib/components/TimeRangeSlider.svelte';
+  import DurationSlider from '$lib/components/DurationSlider.svelte';
+  import TimeSlider from '$lib/components/TimeSlider.svelte';
+  import DayPicker from '$lib/components/DayPicker.svelte';
 
-  const ALL_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
-  const DAY_LABELS: Record<string, string> = {
-    mon: 'M',
-    tue: 'Tu',
-    wed: 'W',
-    thu: 'Th',
-    fri: 'F',
-    sat: 'Sa',
-    sun: 'Su',
-  };
-  const DAY_FULL_LABELS: Record<string, string> = {
-    mon: 'Mon',
-    tue: 'Tue',
-    wed: 'Wed',
-    thu: 'Thu',
-    fri: 'Fri',
-    sat: 'Sat',
-    sun: 'Sun',
-  };
-  const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri'];
-  const WEEKENDS = ['sat', 'sun'];
-
-  const colorNames = COLOR_NAMES;
-
-  interface Props {
-    /** Habit to edit, or null for create mode */
-    editingHabit: Habit | null;
-    calendars: Calendar[];
-    templates: SchedulingTemplate[];
-    userSettings: UserConfig | null;
-    submitting: boolean;
-    /** Streak count for the editing habit */
-    streak: number;
-    /** Completions for the editing habit */
-    completions: HabitCompletion[];
-    onsubmit: (data: HabitFormData) => void;
-    oncancel: () => void;
-    onmarkcomplete: (habitId: string) => void;
-  }
-
-  export interface HabitFormData {
-    name: string;
-    priority: number;
-    windowStart: string;
-    windowEnd: string;
-    idealTime: string;
-    durationMin: number;
-    durationMax: number;
-    frequency: string;
-    frequencyConfig: { days: string[] };
-    schedulingHours: SchedulingHours;
-    forced: boolean;
-    autoDecline: boolean;
-    notifications: boolean;
-    skipBuffer: boolean;
-    calendarId: string | undefined;
-    color: string | undefined;
-  }
+  import X from 'lucide-svelte/icons/x';
 
   let {
-    editingHabit,
-    calendars,
-    templates,
-    userSettings,
-    submitting,
-    streak,
-    completions: completionList,
-    onsubmit,
-    oncancel,
-    onmarkcomplete,
-  }: Props = $props();
+    open,
+    habit,
+    onclose,
+    onsaved,
+  }: {
+    open: boolean;
+    habit: Habit | null;
+    onclose: () => void;
+    onsaved?: () => void;
+  } = $props();
 
-  // --- Form state ---
-  let formName = $state('');
-  let formPriority = $state(3);
-  let formWindowStart = $state('09:00');
-  let formWindowEnd = $state('17:00');
-  let formIdealTime = $state('10:00');
-  let formDurationMin = $state(30);
-  let formDurationMax = $state(60);
-  let formDays = $state<string[]>([...WEEKDAYS]);
-  let formSchedulingHours: SchedulingHours = $state(SchedulingHours.Working);
-  let formForced = $state(false);
-  let formAutoDecline = $state(false);
-  let formNotifications = $state(false);
-  let formSkipBuffer = $state(false);
-  let formCalendarId = $state('');
-  let formColor = $state('');
-  let selectedTemplateId = $state<string | null>(null);
-  let formError = $state('');
+  const isEdit = $derived(habit !== null);
 
-  // --- Helpers ---
+  let name = $state('');
+  let durationMin = $state(30);
+  let durationMax = $state(30);
+  let windowStart = $state('09:00');
+  let windowEnd = $state('17:00');
+  let idealTime = $state('09:00');
+  let selectedDays = $state<DayOfWeek[]>(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']);
+  let schedulingHours = $state<SchedulingHours>(SchedulingHours.Working);
+  let priority = $state<Priority>(Priority.Medium);
+  let color = $state('#5BAD8A');
+  let saving = $state(false);
 
-  function arraysEqual(a: string[], b: string[]): boolean {
-    if (a.length !== b.length) return false;
-    const sorted1 = [...a].sort();
-    const sorted2 = [...b].sort();
-    return sorted1.every((v, i) => v === sorted2[i]);
+  const tmpl = createSchedulingTemplateState();
+
+  function fmtDuration(mins: number): string {
+    if (mins < 60) return `${mins}m`;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m ? `${h}h ${m}m` : `${h}h`;
   }
 
-  function getActivePreset(days: string[]): string {
-    if (arraysEqual(days, [...ALL_DAYS])) return 'every-day';
-    if (arraysEqual(days, WEEKDAYS)) return 'weekdays';
-    if (arraysEqual(days, WEEKENDS)) return 'weekends';
-    return 'custom';
+  function fmtTimeAmPm(t: string): string {
+    const [hStr, mStr] = t.split(':');
+    const h = parseInt(hStr);
+    const m = parseInt(mStr || '0');
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    return m === 0 ? `${h12} ${suffix}` : `${h12}:${String(m).padStart(2, '0')} ${suffix}`;
   }
 
-  function daysFromHabit(habit: Habit): string[] {
-    if (habit.frequencyConfig?.days?.length) return [...habit.frequencyConfig.days];
-    if (habit.frequency === 'daily') return [...ALL_DAYS];
-    if (habit.frequency === 'weekly') return ['mon'];
-    return [...WEEKDAYS];
+  function minsToTime(mins: number): string {
+    const c = Math.max(0, Math.min(1410, mins));
+    return `${String(Math.floor(c / 60)).padStart(2, '0')}:${String(c % 60).padStart(2, '0')}`;
   }
 
-  function detectTemplateMatch(windowStart: string, windowEnd: string): string | null {
-    const match = templates.find((t) => t.startTime === windowStart && t.endTime === windowEnd);
-    return match?.id ?? null;
+  function timeToMins(t: string): number {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + (m || 0);
   }
 
-  function applySchedulingPreset(value: SchedulingHours) {
-    selectedTemplateId = null;
-    const s = userSettings?.settings;
-    if (value === SchedulingHours.Working && s) {
-      formWindowStart = s.workingHours.start;
-      formWindowEnd = s.workingHours.end;
-    } else if (value === SchedulingHours.Personal && s) {
-      formWindowStart = s.personalHours.start;
-      formWindowEnd = s.personalHours.end;
-    } else if (value === SchedulingHours.Custom) {
-      formWindowStart = '00:00';
-      formWindowEnd = '23:59';
-    }
-  }
-
-  function handleScheduleDropdownChange(value: string) {
-    if (value.startsWith('template:')) {
-      const tmplId = value.slice('template:'.length);
-      const tmpl = templates.find((t) => t.id === tmplId);
-      if (tmpl) {
-        selectedTemplateId = tmplId;
-        formSchedulingHours = SchedulingHours.Custom;
-        formWindowStart = tmpl.startTime;
-        formWindowEnd = tmpl.endTime;
-      }
-    } else {
-      formSchedulingHours = value as SchedulingHours;
-      applySchedulingPreset(formSchedulingHours);
-    }
-  }
-
-  function getLast7Days(): string[] {
-    const days: string[] = [];
-    const now = new Date();
-    for (let i = 6; i >= 0; i--) {
-      days.push(formatDate(subDays(now, i), 'yyyy-MM-dd'));
-    }
-    return days;
-  }
-
-  function isDayCompleted(date: string): boolean {
-    return completionList.some((c) => c.scheduledDate.startsWith(date));
-  }
-
-  function getDayLabel(dateStr: string): string {
-    const d = new Date(dateStr + 'T12:00:00');
-    return d.toLocaleDateString('en-US', { weekday: 'narrow' });
-  }
-
-  // --- Initialize form from editing habit or defaults ---
-
-  function initForm(habit: Habit | null) {
-    if (habit) {
-      formName = habit.name;
-      formPriority = habit.priority;
-      formWindowStart = habit.windowStart;
-      formWindowEnd = habit.windowEnd;
-      formIdealTime = habit.idealTime;
-      formDurationMin = habit.durationMin;
-      formDurationMax = habit.durationMax;
-      formDays = daysFromHabit(habit);
-      formSchedulingHours = habit.schedulingHours;
-      selectedTemplateId = detectTemplateMatch(habit.windowStart, habit.windowEnd);
-      formForced = habit.forced;
-      formAutoDecline = habit.autoDecline;
-      formNotifications = habit.notifications ?? false;
-      formSkipBuffer = habit.skipBuffer ?? false;
-      formCalendarId = habit.calendarId ?? '';
-      formColor = habit.color ?? '';
-    } else {
-      formName = '';
-      formPriority = 3;
-      formSchedulingHours = SchedulingHours.Working;
-      selectedTemplateId = null;
-      formForced = false;
-      formAutoDecline = false;
-      formNotifications = false;
-      formSkipBuffer = false;
-      formCalendarId =
-        userSettings?.settings?.defaultHabitCalendarId ??
-        calendars.find((c) => c.isPrimary)?.id ??
-        calendars[0]?.id ??
-        '';
-      formColor = '';
-      formIdealTime = '10:00';
-      formDurationMin = 30;
-      formDurationMax = 60;
-      formDays = [...WEEKDAYS];
-      applySchedulingPreset(formSchedulingHours);
-    }
-    formError = '';
-  }
-
-  // Re-initialize whenever the editingHabit prop changes
+  // Keep durationMax >= durationMin
   $effect(() => {
-    initForm(editingHabit);
+    if (durationMax < durationMin) durationMax = durationMin;
   });
 
-  // --- Submit ---
+  // Compute ideal time bounds from the scheduling window
+  // Convert a window-end time to minutes, treating "00:00" as end-of-day (1410 = 23:30)
+  function windowEndToMins(t: string): number {
+    const mins = timeToMins(t);
+    return mins === 0 && t === '00:00' ? 1410 : mins;
+  }
 
-  function handleFormSubmit() {
-    formError = '';
-    if (formDays.length === 0) {
-      formError = 'Select at least one day';
-      return;
+  let idealMinMins = $derived.by(() => {
+    const config = getCachedSettings();
+    if (schedulingHours === SchedulingHours.Custom) return timeToMins(windowStart);
+    if (schedulingHours === SchedulingHours.Personal)
+      return timeToMins(config?.settings?.personalHours?.start || '17:00');
+    // Working or template
+    const tmplMatch = tmpl.state.templates.find(
+      (t) => `template:${t.id}` === tmpl.getDropdownValue(schedulingHours),
+    );
+    if (tmplMatch) return timeToMins(tmplMatch.startTime);
+    return timeToMins(config?.settings?.workingHours?.start || '09:00');
+  });
+
+  let idealMaxMins = $derived.by(() => {
+    const config = getCachedSettings();
+    if (schedulingHours === SchedulingHours.Custom) return windowEndToMins(windowEnd);
+    if (schedulingHours === SchedulingHours.Personal)
+      return windowEndToMins(config?.settings?.personalHours?.end || '22:00');
+    const tmplMatch = tmpl.state.templates.find(
+      (t) => `template:${t.id}` === tmpl.getDropdownValue(schedulingHours),
+    );
+    if (tmplMatch) return windowEndToMins(tmplMatch.endTime);
+    return windowEndToMins(config?.settings?.workingHours?.end || '17:00');
+  });
+
+  // Clamp ideal time to scheduling window
+  $effect(() => {
+    const minM = idealMinMins;
+    const maxM = idealMaxMins;
+    const cur = timeToMins(idealTime);
+    if (cur < minM) idealTime = minsToTime(minM);
+    else if (cur > maxM) idealTime = minsToTime(maxM);
+  });
+
+  let validationError = $derived(
+    !name.trim()
+      ? 'Name is required'
+      : durationMin < 5
+        ? 'Min duration must be at least 5 minutes'
+        : durationMax < durationMin
+          ? 'Max duration must be >= min duration'
+          : selectedDays.length === 0
+            ? 'Select at least one day'
+            : '',
+  );
+
+  let isValid = $derived(!validationError);
+
+  const colors = [
+    '#5BAD8A',
+    '#5B8DB8',
+    '#8B7CB8',
+    '#C4985A',
+    '#C4645A',
+    '#6BC49E',
+    '#7BA8CC',
+    '#A896CC',
+  ];
+
+  $effect(() => {
+    if (open && habit) {
+      name = habit.name;
+      durationMin = habit.durationMin;
+      durationMax = habit.durationMax;
+      windowStart = habit.windowStart;
+      windowEnd = habit.windowEnd;
+      idealTime = habit.idealTime;
+      selectedDays = habit.days || ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+      schedulingHours = habit.schedulingHours;
+      priority = habit.priority;
+      color = habit.color || '#5BAD8A';
+    } else if (open && !habit) {
+      name = '';
+      durationMin = 30;
+      durationMax = 30;
+      windowStart = '09:00';
+      windowEnd = '17:00';
+      idealTime = '09:00';
+      selectedDays = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+      schedulingHours = SchedulingHours.Working;
+      priority = Priority.Medium;
+      color = '#5BAD8A';
     }
-    if (formDurationMin > formDurationMax) {
-      formError = 'Min duration cannot exceed max';
-      return;
+  });
+
+  onMount(() => {
+    tmpl.load();
+  });
+
+  async function handleSubmit(e: SubmitEvent) {
+    e.preventDefault();
+    if (!name.trim() || saving) return;
+
+    saving = true;
+    try {
+      const data = {
+        name: name.trim(),
+        durationMin,
+        durationMax,
+        windowStart,
+        windowEnd,
+        idealTime,
+        days: [...selectedDays] as DayOfWeek[],
+        schedulingHours,
+        priority,
+        color,
+      };
+
+      if (isEdit && habit) {
+        await habits.update(habit.id, data);
+        showToast('Habit updated', 'success');
+      } else {
+        await habits.create(data);
+        showToast('Habit created', 'success');
+      }
+      onsaved?.();
+      onclose();
+    } catch (err) {
+      if (err instanceof Error && !('handled' in err)) {
+        showToast('Failed to save habit', 'error');
+      }
+    } finally {
+      saving = false;
     }
-    if (formWindowStart >= formWindowEnd) {
-      formError = 'Window start must be before end';
-      return;
-    }
-    onsubmit({
-      name: formName,
-      priority: formPriority,
-      windowStart: formWindowStart,
-      windowEnd: formWindowEnd,
-      idealTime: formIdealTime,
-      durationMin: formDurationMin,
-      durationMax: formDurationMax,
-      frequency: 'daily',
-      frequencyConfig: { days: [...formDays] },
-      schedulingHours: formSchedulingHours,
-      forced: formForced,
-      autoDecline: formAutoDecline,
-      notifications: formNotifications,
-      skipBuffer: formSkipBuffer,
-      calendarId: formCalendarId || undefined,
-      color: formColor || undefined,
-    });
   }
 </script>
 
-<form
-  onsubmit={(e) => {
-    e.preventDefault();
-    handleFormSubmit();
-  }}
-  class="panel-body"
->
-  {#if formError}
-    <div class="alert-error" id="habit-form-error" role="alert">{formError}</div>
-  {/if}
-
-  <div class="form-field">
-    <label for="habit-name">Name</label>
-    <input
-      id="habit-name"
-      type="text"
-      bind:value={formName}
-      required
-      placeholder="e.g., Lunch Break"
-      aria-describedby={formError ? 'habit-form-error' : undefined}
-    />
-  </div>
-
-  <div class="form-field">
-    <label for="habit-priority">Priority</label>
-    <select id="habit-priority" bind:value={formPriority}>
-      <option value={1}>P1 - Critical</option>
-      <option value={2}>P2 - High</option>
-      <option value={3}>P3 - Medium</option>
-      <option value={4}>P4 - Low</option>
-    </select>
-  </div>
-
-  <fieldset class="form-field">
-    <legend class="form-label">Days</legend>
-    <div class="day-presets">
-      <button
-        type="button"
-        class="day-preset"
-        class:day-preset--active={getActivePreset(formDays) === 'every-day'}
-        aria-pressed={getActivePreset(formDays) === 'every-day'}
-        onclick={() => {
-          formDays = [...ALL_DAYS];
-        }}>Every day</button
-      >
-      <span class="day-preset-sep">&middot;</span>
-      <button
-        type="button"
-        class="day-preset"
-        class:day-preset--active={getActivePreset(formDays) === 'weekdays'}
-        aria-pressed={getActivePreset(formDays) === 'weekdays'}
-        onclick={() => {
-          formDays = [...WEEKDAYS];
-        }}>Weekdays</button
-      >
-      <span class="day-preset-sep">&middot;</span>
-      <button
-        type="button"
-        class="day-preset"
-        class:day-preset--active={getActivePreset(formDays) === 'weekends'}
-        aria-pressed={getActivePreset(formDays) === 'weekends'}
-        onclick={() => {
-          formDays = [...WEEKENDS];
-        }}>Weekends</button
-      >
-      <span class="day-preset-sep">&middot;</span>
-      <button
-        type="button"
-        class="day-preset"
-        class:day-preset--active={getActivePreset(formDays) === 'custom'}
-        aria-pressed={getActivePreset(formDays) === 'custom'}
-        disabled={getActivePreset(formDays) === 'custom'}>Custom</button
-      >
-    </div>
-    <div class="day-picker">
-      {#each ALL_DAYS as day (day)}
-        <button
-          type="button"
-          class="day-pill"
-          class:day-pill--active={formDays.includes(day)}
-          onclick={() => {
-            if (formDays.includes(day)) {
-              if (formDays.length > 1) {
-                formDays = formDays.filter((d) => d !== day);
-              }
-            } else {
-              formDays = [...formDays, day];
-            }
-          }}
-          aria-label={DAY_FULL_LABELS[day]}
-          aria-pressed={formDays.includes(day)}>{DAY_LABELS[day]}</button
-        >
-      {/each}
-    </div>
-  </fieldset>
-
-  <fieldset class="form-section">
-    <legend class="form-section-header">Duration</legend>
-    <span class="form-helper"
-      >How long this habit should be (the scheduler picks a duration in this range)</span
+{#if open}
+  <div
+    class="modal-overlay"
+    role="presentation"
+    onclick={onclose}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') onclose();
+    }}
+    transition:fade={{ duration: 120 }}
+  >
+    <div
+      class="modal-card"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      transition:fly={{ y: 12, duration: 180 }}
     >
-    <div class="form-row">
-      <div class="form-field">
-        <label for="habit-dur-min">Minimum</label>
-        <input
-          id="habit-dur-min"
-          type="number"
-          bind:value={formDurationMin}
-          min={DEFAULT_HABIT_DURATION_MIN}
-          max={DEFAULT_HABIT_DURATION_MAX}
-        />
+      <div class="modal-header">
+        <h2 class="modal-title">{isEdit ? 'Edit habit' : 'New habit'}</h2>
+        <button class="modal-close" onclick={onclose} aria-label="Close">
+          <X size={16} />
+        </button>
       </div>
-      <div class="form-field">
-        <label for="habit-dur-max">Maximum</label>
-        <input
-          id="habit-dur-max"
-          type="number"
-          bind:value={formDurationMax}
-          min={DEFAULT_HABIT_DURATION_MIN}
-          max={DEFAULT_HABIT_DURATION_MAX}
-        />
-      </div>
-    </div>
-  </fieldset>
 
-  <div class="form-field">
-    <label for="habit-sched">Schedule during</label>
-    <select
-      id="habit-sched"
-      value={getScheduleDropdownValue(formSchedulingHours, selectedTemplateId)}
-      onchange={(e) => handleScheduleDropdownChange(e.currentTarget.value)}
-    >
-      <option value="working"
-        >Work hours{userSettings?.settings
-          ? ` (${userSettings.settings.workingHours.start}\u2013${userSettings.settings.workingHours.end})`
-          : ''}</option
-      >
-      <option value="personal"
-        >Personal hours{userSettings?.settings
-          ? ` (${userSettings.settings.personalHours.start}\u2013${userSettings.settings.personalHours.end})`
-          : ''}</option
-      >
-      <option value="custom">Anytime (custom)</option>
-      {#if templates.length > 0}
-        <optgroup label="Templates">
-          {#each templates as tmpl (tmpl.id)}
-            <option value="template:{tmpl.id}"
-              >{tmpl.name} ({tmpl.startTime}\u2013{tmpl.endTime})</option
-            >
-          {/each}
-        </optgroup>
-      {/if}
-    </select>
-    <span class="form-helper">Preset fills the time range below</span>
-  </div>
+      <form class="modal-body" onsubmit={handleSubmit}>
+        <div class="form-field">
+          <label class="form-label" for="habit-name">Name</label>
+          <input
+            id="habit-name"
+            class="form-input"
+            bind:value={name}
+            required
+            placeholder="e.g., Morning exercise"
+          />
+        </div>
 
-  <fieldset class="form-section">
-    <legend class="form-section-header">Available time range</legend>
-    <span class="form-helper">The time range this habit can be scheduled within</span>
-    <div class="form-row">
-      <div class="form-field">
-        <label for="habit-win-start">Earliest</label>
-        <input id="habit-win-start" type="time" bind:value={formWindowStart} />
-      </div>
-      <div class="form-field">
-        <label for="habit-win-end">Latest</label>
-        <input id="habit-win-end" type="time" bind:value={formWindowEnd} />
-      </div>
-    </div>
-  </fieldset>
+        <DurationSlider bind:value={durationMin} label="Min duration" min={5} max={360} />
+        <DurationSlider bind:value={durationMax} label="Max duration" min={5} max={360} />
 
-  <div class="form-field">
-    <label for="habit-ideal">Preferred time</label>
-    <input id="habit-ideal" type="time" bind:value={formIdealTime} />
-    <span class="form-helper">The scheduler will try to schedule near this time</span>
-  </div>
+        <div class="form-field">
+          <label class="form-label" for="habit-schedule">Schedule during</label>
+          <select
+            id="habit-schedule"
+            class="form-select"
+            value={tmpl.getDropdownValue(schedulingHours)}
+            onchange={(e) =>
+              tmpl.handleDropdownChange((e.target as HTMLSelectElement).value, (hours) => {
+                schedulingHours = hours;
+              })}
+          >
+            <option value={SchedulingHours.Working}>Working hours</option>
+            <option value={SchedulingHours.Personal}>Personal hours</option>
+            <option value={SchedulingHours.Custom}>Custom</option>
+            {#if tmpl.state.templates.length > 0}
+              <optgroup label="Templates">
+                {#each tmpl.state.templates as t (t.id)}
+                  <option value="template:{t.id}">{t.name}</option>
+                {/each}
+              </optgroup>
+            {/if}
+          </select>
+        </div>
 
-  {#if calendars.length > 0}
-    <div class="form-field">
-      <label for="habit-calendar">Calendar</label>
-      <select id="habit-calendar" bind:value={formCalendarId}>
-        {#each calendars as cal (cal.id)}
-          <option value={cal.id}>{cal.isPrimary ? `Default - ${cal.name}` : cal.name}</option>
-        {/each}
-      </select>
-    </div>
-  {/if}
-
-  <fieldset class="form-field">
-    <legend class="form-label">Color</legend>
-    <div class="color-picker">
-      {#each COLOR_PALETTE as c (c)}
-        <button
-          type="button"
-          class="color-swatch"
-          class:color-swatch--active={formColor === c}
-          style="background: {c};"
-          onclick={() => {
-            formColor = c;
-          }}
-          aria-label="Select {colorNames[c] ?? c}"
-          aria-pressed={formColor === c}
-        ></button>
-      {/each}
-      <button
-        type="button"
-        class="color-swatch color-swatch--none"
-        class:color-swatch--active={!formColor}
-        onclick={() => {
-          formColor = '';
-        }}
-        aria-label="No color"
-        aria-pressed={!formColor}>&#x2715;</button
-      >
-    </div>
-  </fieldset>
-
-  <div class="form-toggles">
-    <label class="toggle-label">
-      <input type="checkbox" bind:checked={formForced} />
-      <span>Forced</span>
-    </label>
-    <label class="toggle-label">
-      <input type="checkbox" bind:checked={formAutoDecline} />
-      <span>Auto-decline</span>
-    </label>
-    <label class="toggle-label">
-      <input type="checkbox" bind:checked={formNotifications} />
-      <span>Notifications</span>
-    </label>
-    <label class="toggle-label">
-      <input type="checkbox" bind:checked={formSkipBuffer} />
-      <span>No buffer time</span>
-    </label>
-  </div>
-
-  {#if editingHabit}
-    <!-- Last 7 days completion -->
-    <div class="completion-section">
-      <div class="completion-header">
-        <span class="completion-title">Last 7 Days</span>
-        {#if streak > 0}
-          <span class="streak-badge">
-            <Flame size={14} strokeWidth={1.5} />
-            {streak} day streak
-          </span>
+        {#if schedulingHours === SchedulingHours.Custom}
+          <TimeRangeSlider bind:start={windowStart} bind:end={windowEnd} />
         {/if}
-      </div>
-      <div class="completion-dots">
-        {#each getLast7Days() as day (day)}
-          <div class="completion-day">
-            <div class="completion-dot" class:completed={isDayCompleted(day)}></div>
-            <span class="completion-day-label">{getDayLabel(day)}</span>
-          </div>
-        {/each}
-      </div>
-      <button
-        type="button"
-        class="btn-action"
-        onclick={() => {
-          onmarkcomplete(editingHabit!.id);
-        }}
-      >
-        <CircleCheck size={16} strokeWidth={1.5} />
-        Mark Complete Today
-      </button>
-    </div>
-  {/if}
 
-  <div class="panel-footer">
-    <button type="submit" class="btn-save" disabled={submitting}>
-      {submitting ? 'Saving...' : 'Save'}
-    </button>
-    <button type="button" class="btn-cancel" onclick={oncancel}> Cancel </button>
+        <TimeSlider
+          bind:value={idealTime}
+          label="Ideal time"
+          min={idealMinMins}
+          max={idealMaxMins}
+        />
+
+        <div class="form-field">
+          <span class="form-label">Days</span>
+          <DayPicker bind:selected={selectedDays} />
+        </div>
+
+        <div class="form-field">
+          <label class="form-label" for="habit-priority">Priority</label>
+          <select id="habit-priority" class="form-select" bind:value={priority}>
+            <option value={Priority.Critical}>Critical</option>
+            <option value={Priority.High}>High</option>
+            <option value={Priority.Medium}>Medium</option>
+            <option value={Priority.Low}>Low</option>
+          </select>
+        </div>
+
+        <div class="form-field">
+          <span class="form-label" id="habit-color-label">Color</span>
+          <div class="color-row" role="group" aria-labelledby="habit-color-label">
+            {#each colors as c (c)}
+              <button
+                type="button"
+                class="color-dot"
+                class:color-active={color === c}
+                style:background-color={c}
+                onclick={() => (color = c)}
+                aria-label="Select color"
+              ></button>
+            {/each}
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          {#if validationError}
+            <span class="validation-hint">{validationError}</span>
+          {/if}
+          <button type="button" class="btn-secondary" onclick={onclose}>Cancel</button>
+          <button type="submit" class="btn-primary" disabled={saving || !isValid}>
+            {saving ? 'Saving...' : isEdit ? 'Save' : 'Create'}
+          </button>
+        </div>
+      </form>
+    </div>
   </div>
-</form>
+{/if}
 
 <style lang="scss">
+  @use '$lib/styles/variables' as *;
   @use '$lib/styles/mixins' as *;
 
-  .form-toggles {
-    display: flex;
-    gap: var(--space-6);
-    padding: var(--space-2) 0;
-    flex-wrap: wrap;
-  }
-
-  .streak-badge {
-    @include badge;
-    gap: 3px;
-    padding: 0;
-    font-size: 0.8125rem;
-    color: var(--color-warning-amber);
-  }
-
-  .completion-section {
-    @include flex-col(var(--space-3));
-    padding: var(--space-3) 0;
-    border-top: 1px solid var(--color-border);
-  }
-
-  .completion-header {
-    @include flex-between;
-  }
-
-  .completion-title {
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: var(--color-text-secondary);
-  }
-
-  .completion-dots {
-    display: flex;
-    gap: var(--space-3);
-    justify-content: space-between;
-  }
-
-  .completion-day {
-    @include flex-col(var(--space-1));
-    align-items: center;
-  }
-
-  .completion-dot {
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-full);
-    border: 2px solid var(--color-border);
-    background: none;
-    transition:
-      background var(--transition-fast),
-      border-color var(--transition-fast);
-
-    &.completed {
-      background: var(--color-success);
-      border-color: var(--color-success);
-    }
-  }
-
-  .completion-day-label {
-    font-size: 0.6875rem;
-    color: var(--color-text-tertiary);
-    font-weight: 500;
-  }
-
-  .form-section {
-    border: none;
-    padding: 0;
-    margin: 0;
-    @include flex-col(var(--space-2));
-
-    &-header {
-      font-size: 0.8125rem;
-      font-weight: 600;
-      color: var(--color-text);
-      padding: 0;
-    }
-  }
-
-  .form-helper {
-    font-size: 0.75rem;
-    color: var(--color-text-tertiary);
-    line-height: 1.4;
-  }
-
-  .day-presets {
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: $z-modal;
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    flex-wrap: wrap;
+    justify-content: center;
+    background: var(--color-overlay);
+    backdrop-filter: blur(2px);
+    padding: var(--space-4);
   }
 
-  .day-preset {
-    background: none;
-    border: none;
-    padding: 0;
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: var(--color-text-tertiary);
-    cursor: pointer;
-    transition: color var(--transition-fast);
-
-    &:hover:not(:disabled) {
-      color: var(--color-text);
-    }
-
-    &:disabled {
-      cursor: default;
-      opacity: 0.5;
-    }
-
-    &--active {
-      color: var(--color-accent);
-    }
-
-    &-sep {
-      font-size: 0.75rem;
-      color: var(--color-border-strong);
-      user-select: none;
-    }
-  }
-
-  .day-picker {
-    display: flex;
-    gap: var(--space-1);
-  }
-
-  .day-pill {
-    @include flex-center;
-    width: 36px;
-    height: 36px;
-    border-radius: var(--radius-full);
+  .modal-card {
+    width: 100%;
+    max-width: 480px;
+    max-height: 90vh;
+    background: var(--color-surface);
     border: 1px solid var(--color-border);
-    background: none;
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-5) var(--space-5) 0;
+  }
+
+  .modal-title {
+    font-family: $font-body;
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 0;
+  }
+
+  .modal-close {
+    @include icon-btn(28px);
     color: var(--color-text-tertiary);
-    font-size: 0.8125rem;
-    font-weight: 500;
+  }
+
+  .modal-body {
+    @include flex-col(var(--space-4));
+    padding: var(--space-5);
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-separator);
+  }
+
+  .validation-hint {
+    font-size: 0.6875rem;
+    color: var(--color-danger);
+    margin-right: auto;
+  }
+
+  .color-row {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .color-dot {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid transparent;
     cursor: pointer;
+    padding: 0;
     transition:
-      background var(--transition-fast),
-      color var(--transition-fast),
-      border-color var(--transition-fast);
+      border-color var(--transition-fast),
+      transform 80ms ease;
 
     &:hover {
-      border-color: var(--color-border-strong);
-      color: var(--color-text-secondary);
+      transform: scale(1.15);
     }
+  }
 
-    &--active {
-      background: var(--color-accent);
-      border-color: var(--color-accent);
-      color: var(--color-accent-text);
-
-      &:hover {
-        background: var(--color-accent-hover);
-        border-color: var(--color-accent-hover);
-        color: var(--color-accent-text);
-      }
-    }
+  .color-active {
+    border-color: var(--color-text);
   }
 </style>

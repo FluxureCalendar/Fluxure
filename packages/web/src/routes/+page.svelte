@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { page } from '$app/stores';
   import { pageTitle } from '$lib/brand';
   import {
     schedule,
@@ -8,19 +10,18 @@
     settings as settingsApi,
   } from '$lib/api';
   import { getCachedSettings, setCachedSettings } from '$lib/cache.svelte';
-  import { quickAdd, type QuickAddResult } from '$lib/api';
-  import Plus from 'lucide-svelte/icons/plus';
-  import Loader from 'lucide-svelte/icons/loader';
   import ChevronLeft from 'lucide-svelte/icons/chevron-left';
   import ChevronRight from 'lucide-svelte/icons/chevron-right';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
   import { subscribe as subscribeWs } from '$lib/ws';
-  import EventDetailPanel from './EventDetailPanel.svelte';
-  import EventContextMenu from './EventContextMenu.svelte';
-  import HabitResizePrompt from './HabitResizePrompt.svelte';
-  import { showSuccess, showError, showInfo } from '$lib/notifications.svelte';
+  import EventDetailPanel from './dashboard/EventDetailPanel.svelte';
+  import EventContextMenu from './dashboard/EventContextMenu.svelte';
+  import HabitResizePrompt from './dashboard/HabitResizePrompt.svelte';
+  import { showToast } from '$lib/toast.svelte';
+  import { isSyncing } from '$lib/sync-state.svelte';
+  import { getAuthState } from '$lib/auth.svelte';
   import { SvelteDate } from 'svelte/reactivity';
-  import { goto } from '$app/navigation';
+  import { goto, replaceState } from '$app/navigation';
   import { resolve } from '$app/paths';
   import {
     TIME_TICK_INTERVAL_MS,
@@ -34,54 +35,76 @@
     getDay,
     addMinutes,
   } from '@fluxure/shared';
-  import QualityGauge from './QualityGauge.svelte';
-  import DashboardChanges from './DashboardChanges.svelte';
-  import WeekCalendarGrid from './WeekCalendarGrid.svelte';
-  import { type CalEvent, eventTypeMap, legendItems, mapApiEvents } from './dashboard-utils';
+  import QualityGauge from './dashboard/QualityGauge.svelte';
+  import DashboardChanges from './dashboard/DashboardChanges.svelte';
+  import WeekCalendarGrid from './dashboard/WeekCalendarGrid.svelte';
+  import {
+    type CalEvent,
+    eventTypeMap,
+    legendItems,
+    mapApiEvents,
+  } from './dashboard/dashboard-utils';
 
   let userTimezone = $state(Intl.DateTimeFormat().resolvedOptions().timeZone);
 
   let currentWeekStart = $state(getMonday(new Date()));
   let loading = $state(true);
-  let error = $state('');
+  let settingsLoaded = $state(false);
 
-  let quickAddInput = $state('');
-  let quickAddLoading = $state(false);
-  let quickAddError = $state('');
-  let quickAddSuccess = $state('');
+  const auth = getAuthState();
 
-  async function handleQuickAdd() {
-    const input = quickAddInput.trim();
-    if (!input || quickAddLoading) return;
-    quickAddLoading = true;
-    quickAddError = '';
-    quickAddSuccess = '';
+  function getGreeting(): string {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
+
+  let firstName = $derived(auth.user?.name?.split(' ')[0] ?? '');
+
+  // Next event fetched independently from the view — always relative to "now"
+  let absoluteNextEvent = $state<{ title: string; startISO: string } | null>(null);
+
+  async function fetchNextEvent() {
     try {
-      const result: QuickAddResult = await quickAdd.parse(input);
-      if (result.created) {
-        const name = result.parsed?.name || input;
-        quickAddSuccess = `Created ${result.type}: ${name}`;
-        quickAddInput = '';
-        await refreshEventsSilently();
-      } else {
-        quickAddError = result.error || 'Could not parse input. Try: "Gym MWF 7am 1h"';
-      }
-    } catch (err) {
-      quickAddError = err instanceof Error ? err.message : 'Failed to create item';
-    } finally {
-      quickAddLoading = false;
+      const now = new Date();
+      const lookahead = addDays(now, 7);
+      const apiEvents = await schedule.getEvents(now.toISOString(), lookahead.toISOString());
+      const upcoming = apiEvents
+        .filter((e: { start: string }) => new Date(e.start).getTime() > now.getTime())
+        .sort(
+          (a: { start: string }, b: { start: string }) =>
+            new Date(a.start).getTime() - new Date(b.start).getTime(),
+        );
+      absoluteNextEvent = upcoming[0]
+        ? { title: upcoming[0].title, startISO: upcoming[0].start }
+        : null;
+    } catch {
+      // Non-critical — keep last known value
     }
   }
 
-  // Auto-clear success message after 4 seconds
+  // Ticks every minute to keep the "Next: ... in Xm" display fresh
+  let headerTick = $state(0);
   $effect(() => {
-    if (quickAddSuccess) {
-      const timer = setTimeout(() => {
-        quickAddSuccess = '';
-      }, 4000);
-      return () => clearTimeout(timer);
-    }
+    const interval = setInterval(() => {
+      headerTick++;
+    }, 60_000);
+    return () => clearInterval(interval);
   });
+
+  function formatRelativeTime(iso: string): string {
+    void headerTick;
+    const diff = new Date(iso).getTime() - Date.now();
+    if (diff < 0) return 'now';
+    const mins = Math.round(diff / 60000);
+    if (mins < 1) return 'now';
+    if (mins < 60) return `in ${mins}m`;
+    const hrs = Math.floor(mins / 60);
+    const rem = mins % 60;
+    if (rem === 0) return `in ${hrs}h`;
+    return `in ${hrs}h ${rem}m`;
+  }
 
   let selectedEvent = $state<CalEvent | null>(null);
 
@@ -155,14 +178,11 @@
     return `${monthNames[start.getMonth()]} ${start.getDate()} \u2013 ${monthNames[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
   }
 
+  let pendingEventId = $state<string | null>(null);
+
   let deleting = $state(false);
   let rescheduling = $state(false);
   let rescheduleCooldown = $state(false);
-  let rescheduleResult = $state<{
-    message: string;
-    operationsApplied: number;
-    unschedulable: unknown[];
-  } | null>(null);
 
   let events = $state<CalEvent[]>([]);
 
@@ -184,6 +204,18 @@
     const timer = setTimeout(() => {
       nowTick++;
     }, delay);
+    return () => clearTimeout(timer);
+  });
+
+  // Re-fetch next event when the current one's start time passes
+  $effect(() => {
+    if (!absoluteNextEvent) return;
+    const msUntilStart = new Date(absoluteNextEvent.startISO).getTime() - Date.now();
+    if (msUntilStart <= 0) {
+      fetchNextEvent();
+      return;
+    }
+    const timer = setTimeout(() => fetchNextEvent(), msUntilStart + 500);
     return () => clearTimeout(timer);
   });
 
@@ -228,17 +260,21 @@
 
   async function fetchEvents() {
     loading = true;
-    error = '';
+    // error cleared
     try {
       const { start, end } = fetchWeekBounds();
       const apiEvents = await schedule.getEvents(start, end);
       events = mapApiEvents(apiEvents, getHourInTz, getDayInTz);
+      fetchNextEvent();
     } catch (err) {
       if ((err as { handled?: boolean }).handled) return;
       if (err instanceof TypeError) {
-        error = "You're offline — check your connection";
+        showToast("You're offline — check your connection", 'error');
       } else {
-        error = `Failed to load events: ${err instanceof Error ? err.message : 'Unknown error'}`;
+        showToast(
+          `Failed to load events: ${err instanceof Error ? err.message : 'Unknown error'}`,
+          'error',
+        );
       }
       events = [];
     } finally {
@@ -261,6 +297,7 @@
       if (eventsFingerprint(newEvents) !== eventsFingerprint(events)) {
         events = newEvents;
       }
+      fetchNextEvent();
     } catch {
       // Silent refresh failure is non-critical; the user already has stale data visible
     }
@@ -287,7 +324,7 @@
 
   async function confirmDelete(event: CalEvent) {
     if (!event.itemId) return;
-    error = '';
+    // error cleared
     deleting = true;
     const entityId = event.itemId.split('__')[0];
     try {
@@ -301,7 +338,7 @@
       closeContextMenu();
       // WS will refresh when reschedule finishes
     } catch {
-      error = 'Failed to delete event.';
+      showToast('Failed to delete event.', 'error');
       await refreshEventsSilently();
     } finally {
       deleting = false;
@@ -309,16 +346,20 @@
   }
 
   async function handleReschedule() {
-    error = '';
+    // error cleared
     rescheduling = true;
-    rescheduleResult = null;
     try {
       const result = await schedule.run();
-      rescheduleResult = result;
       if (result.operationsApplied > 0) {
         await fetchEvents();
+        let msg = `${result.operationsApplied} changes applied`;
+        if (result.unschedulable?.length > 0) {
+          msg += ` · ${result.unschedulable.length} items couldn't be scheduled`;
+        }
+        showToast(msg, 'success');
+      } else {
+        showToast('Schedule is already optimal', 'info');
       }
-      // Cooldown prevents repeated requests when nothing changed
       rescheduleCooldown = true;
       setTimeout(
         () => {
@@ -327,7 +368,7 @@
         result.operationsApplied > 0 ? 10_000 : 30_000,
       );
     } catch {
-      error = 'Failed to reschedule.';
+      showToast('Failed to reschedule.', 'error');
     } finally {
       rescheduling = false;
     }
@@ -367,7 +408,7 @@
 
   async function toggleLock(event: CalEvent) {
     if (!event.id) return;
-    error = '';
+    // error cleared
     const newLocked = !isLocked(event);
     try {
       // Optimistic update — only this specific event
@@ -377,7 +418,7 @@
       await schedule.lockEvent(event.id, newLocked);
       // Reschedule runs async; WS will refresh when done
     } catch {
-      error = 'Failed to toggle lock.';
+      showToast('Failed to toggle lock.', 'error');
       await refreshEventsSilently();
     }
     closeContextMenu();
@@ -386,20 +427,29 @@
 
   function canComplete(event: CalEvent): boolean {
     if (event.type === 'external' || event.type === 'manual') return false;
-    if (event.status === 'completed') return false;
     return !!event.id;
+  }
+
+  function isCompleted(event: CalEvent): boolean {
+    return event.status === 'completed';
   }
 
   async function completeEvent(event: CalEvent) {
     if (!event.id) return;
-    error = '';
+    // error cleared
     try {
-      // Optimistic update
-      events = events.map((e) => (e.id === event.id ? { ...e, status: 'completed' } : e));
-      await schedule.complete(event.id);
+      if (isCompleted(event)) {
+        // Uncomplete
+        events = events.map((e) => (e.id === event.id ? { ...e, status: 'free' } : e));
+        await schedule.uncomplete(event.id);
+      } else {
+        // Complete
+        events = events.map((e) => (e.id === event.id ? { ...e, status: 'completed' } : e));
+        await schedule.complete(event.id);
+      }
       // WS will refresh when reschedule finishes
     } catch {
-      error = 'Failed to complete event.';
+      showToast('Failed to complete event.', 'error');
       await refreshEventsSilently();
     }
   }
@@ -421,7 +471,7 @@
     try {
       await schedule.moveEvent(event.id, newStartISO, newEndISO);
     } catch {
-      error = 'Failed to move event.';
+      showToast('Failed to move event.', 'error');
       await refreshEventsSilently();
     }
   }
@@ -471,7 +521,7 @@
         await schedule.moveEvent(eventId, newStartISO, newEndISO);
       }
     } catch {
-      error = 'Failed to move event.';
+      showToast('Failed to move event.', 'error');
       await refreshEventsSilently();
     }
   }
@@ -533,7 +583,7 @@
       }
       // WS will reconcile if server adjusted the times
     } catch {
-      error = 'Failed to resize event.';
+      showToast('Failed to resize event.', 'error');
       await refreshEventsSilently();
     }
   }
@@ -550,7 +600,7 @@
         try {
           await habitsApi.update(habitId, { durationMin: editMin, durationMax: editMax });
         } catch {
-          error = 'Failed to update habit duration.';
+          showToast('Failed to update habit duration.', 'error');
           return;
         }
       }
@@ -590,43 +640,45 @@
     scrollContainer.scrollTop = scrollTarget;
   }
 
-  // Use browser timezone as optimistic default; re-fetch if stored timezone differs
+  // Load user settings — use cache first, then fetch (only client-side)
   const cachedConfig = getCachedSettings();
   if (cachedConfig?.settings?.timezone) {
     userTimezone = cachedConfig.settings.timezone;
     currentWeekStart = getMonday(new Date());
   }
-  // Re-fetch events only if timezone changed
-  settingsApi
-    .get()
-    .then((config) => {
-      setCachedSettings(config);
-      if (config.settings?.timezone && config.settings.timezone !== userTimezone) {
-        userTimezone = config.settings.timezone;
-        currentWeekStart = getMonday(new Date());
-        // $effect below re-fetches when week changes
-      }
-    })
-    .catch((err) => {
-      if (!(err as { handled?: boolean }).handled) {
-        showError('Failed to load settings');
-      }
-    });
+
+  onMount(() => {
+    settingsApi
+      .get()
+      .then((config) => {
+        setCachedSettings(config);
+        if (config.settings?.timezone && config.settings.timezone !== userTimezone) {
+          userTimezone = config.settings.timezone;
+          currentWeekStart = getMonday(new Date());
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        settingsLoaded = true;
+      });
+  });
 
   $effect(() => {
     const _week = currentWeekStart;
-    fetchEvents();
+    if (settingsLoaded) fetchEvents();
   });
 
-  // Handle OAuth callback redirect
-  $effect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('google') === 'connected') {
-      showSuccess('Google Calendar connected');
-      const url = new URL(window.location.href);
-      url.searchParams.delete('google');
-      window.history.replaceState({}, '', url.pathname + url.search);
-    }
+  // Handle OAuth callback redirect (deferred until router is ready)
+  onMount(() => {
+    requestAnimationFrame(() => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('google') === 'connected') {
+        showToast('Google Calendar connected', 'success');
+        const url = new URL(window.location.href);
+        url.searchParams.delete('google');
+        replaceState(url.pathname + url.search, {});
+      }
+    });
   });
 
   $effect(() => {
@@ -635,114 +687,111 @@
     }
   });
 
-  $effect(() => {
-    if (rescheduleResult) {
-      const timer = setTimeout(() => {
-        rescheduleResult = null;
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  });
-
   // Auto-refresh calendar on WebSocket schedule updates
   $effect(() => {
     const unsubscribe = subscribeWs((msg) => {
       if (msg.type === 'schedule_updated') {
         refreshEventsSilently();
-        showInfo(msg.reason || 'Schedule updated');
       }
     });
     return () => unsubscribe();
   });
+
+  // Deep link: open event detail panel from ?event=<id>&estart=<iso>
+  // Uses $page store which is reactive to URL changes (including same-route navigations)
+  $effect(() => {
+    const eventId = $page.url.searchParams.get('event');
+    if (!eventId) return;
+
+    const eventStart = $page.url.searchParams.get('estart');
+
+    // Clean URL immediately
+    window.history.replaceState({}, '', '/');
+
+    // Navigate to the week containing the event
+    if (eventStart) {
+      const startDate = new Date(decodeURIComponent(eventStart));
+      if (!isNaN(startDate.getTime())) {
+        const targetWeek = getMonday(startDate);
+        if (targetWeek.getTime() !== currentWeekStart.getTime()) {
+          currentWeekStart = targetWeek;
+          // Events will reload via the currentWeekStart $effect — stash for when they arrive
+          pendingEventId = eventId;
+          return;
+        }
+      }
+    }
+
+    // Already on the right week — try to open now or stash
+    if (events.length > 0) {
+      const event = events.find((e) => e.id === eventId);
+      if (event) selectedEvent = event;
+    } else {
+      pendingEventId = eventId;
+    }
+  });
+
+  // Resolve pending event deep link once events load
+  $effect(() => {
+    if (!pendingEventId || events.length === 0) return;
+    const event = events.find((e) => e.id === pendingEventId);
+    if (event) selectedEvent = event;
+    pendingEventId = null;
+  });
 </script>
 
 <svelte:head>
-  <title>{pageTitle('Schedule')}</title>
+  <title>{pageTitle('Dashboard')}</title>
 </svelte:head>
 
 <div class="dashboard">
   <!-- Header -->
   <header class="dashboard-header">
     <div class="header-left">
-      <h1 class="header-title">Schedule</h1>
-      <span class="header-date-range font-mono">{formatWeekRange(currentWeekStart)}</span>
+      <div class="header-top">
+        <h1 class="header-title">{getGreeting()}{firstName ? `, ${firstName}` : ''}</h1>
+      </div>
+      <div class="header-meta">
+        <span class="header-date-range">{formatWeekRange(currentWeekStart)}</span>
+        {#if absoluteNextEvent}
+          <span class="header-sep">&middot;</span>
+          <span class="header-next"
+            >Next: {absoluteNextEvent.title} {formatRelativeTime(absoluteNextEvent.startISO)}</span
+          >
+        {/if}
+      </div>
     </div>
     <div class="header-nav">
       <QualityGauge />
       <button
         class="reschedule-btn"
         onclick={handleReschedule}
-        disabled={rescheduling || rescheduleCooldown}
+        disabled={rescheduling || rescheduleCooldown || isSyncing()}
         aria-busy={rescheduling}
       >
         <RefreshCw size={16} strokeWidth={1.5} class={rescheduling ? 'spinning' : ''} />
         {rescheduling ? 'Scheduling...' : 'Reschedule'}
       </button>
-      <button onclick={prevWeek} aria-label="Previous week" class="nav-btn">
-        <ChevronLeft size={16} strokeWidth={1.5} />
-      </button>
-      <button onclick={goToday} class="today-btn"> Today </button>
-      <button onclick={nextWeek} aria-label="Next week" class="nav-btn">
-        <ChevronRight size={16} strokeWidth={1.5} />
-      </button>
+      <div class="week-nav">
+        <button onclick={prevWeek} aria-label="Previous week" class="nav-btn">
+          <ChevronLeft size={16} strokeWidth={1.5} />
+        </button>
+        <button onclick={goToday} class="today-btn">Today</button>
+        <button onclick={nextWeek} aria-label="Next week" class="nav-btn">
+          <ChevronRight size={16} strokeWidth={1.5} />
+        </button>
+      </div>
     </div>
   </header>
 
-  <!-- Quick Add Bar -->
-  <form
-    class="quick-add"
-    onsubmit={(e) => {
-      e.preventDefault();
-      handleQuickAdd();
-    }}
-  >
-    <input
-      type="text"
-      class="quick-add-input"
-      placeholder="Quick add... (e.g., 'Gym MWF 7am 1h')"
-      aria-label="Quick add item"
-      bind:value={quickAddInput}
-      disabled={quickAddLoading}
-    />
-    <button
-      type="submit"
-      class="quick-add-btn"
-      disabled={quickAddLoading || !quickAddInput.trim()}
-      aria-label="Add item"
-    >
-      {#if quickAddLoading}
-        <Loader size={16} strokeWidth={1.5} class="spinning" />
-      {:else}
-        <Plus size={16} strokeWidth={1.5} />
-      {/if}
-    </button>
-    {#if quickAddSuccess}
-      <span class="quick-add-success" role="status" aria-live="polite">{quickAddSuccess}</span>
-    {/if}
-    {#if quickAddError}
-      <span class="quick-add-error" role="alert" aria-live="assertive">{quickAddError}</span>
-    {/if}
-  </form>
-
-  <div role="alert" aria-live="assertive">
-    {#if error}
-      <div class="error-banner">{error}</div>
-    {/if}
-  </div>
-
-  <div aria-live="polite">
-    {#if rescheduleResult}
-      <div class="reschedule-banner">
-        {#if rescheduleResult.operationsApplied === 0}
-          &#10003; Schedule is already optimal — no changes needed
-        {:else}
-          &#10003; {rescheduleResult.operationsApplied} changes applied
-        {/if}
-        {#if rescheduleResult.unschedulable?.length > 0}
-          &middot; {rescheduleResult.unschedulable.length} items couldn't be scheduled
-        {/if}
-      </div>
-    {/if}
+  <div class="legend">
+    {#each legendItems as item (item.type)}
+      {@const s = eventTypeMap[item.type]}
+      <span class="legend-item">
+        <span class="legend-dot" style="background: {s.border};"></span>
+        {item.label}
+      </span>
+    {/each}
   </div>
 
   <WeekCalendarGrid
@@ -751,9 +800,7 @@
     {loading}
     {dayNames}
     {eventTypeMap}
-    {userTimezone}
     {isToday}
-    {getCurrentTimePosition}
     {getTodayDayIndex}
     {isEventPast}
     {canDrag}
@@ -771,18 +818,6 @@
   />
 
   {#if !loading}
-    <!-- Legend -->
-    <div class="legend">
-      {#each legendItems as item (item.type)}
-        {@const styles = eventTypeMap[item.type]}
-        <span class="legend-chip">
-          <span class="legend-dot" style="background-color: {styles.border};"></span>
-          {item.label}
-        </span>
-      {/each}
-    </div>
-
-    <!-- Recent Changes -->
     <DashboardChanges {userTimezone} />
   {/if}
 </div>
@@ -803,6 +838,7 @@
     {formatTime}
     {canEdit}
     {canComplete}
+    {isCompleted}
     {canLock}
     {canDelete}
     {isLocked}
@@ -836,6 +872,9 @@
 {/if}
 
 <svelte:window
+  onclick={() => {
+    if (contextMenu) closeContextMenu();
+  }}
   onkeydown={(e) => {
     if (e.key === 'Escape') {
       if (habitResizePrompt) {
@@ -864,37 +903,79 @@
 {/if}
 
 <style lang="scss">
+  @use '$lib/styles/variables' as *;
   @use '$lib/styles/mixins' as *;
 
   .dashboard {
-    @include flex-col(var(--space-4));
+    @include flex-col(var(--space-5));
+  }
+
+  .legend {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-3);
+    margin-bottom: calc(-1 * var(--space-4));
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.625rem;
+    color: var(--color-text-tertiary);
+  }
+
+  :global(.legend-dot) {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
   }
 
   .dashboard-header {
-    @include flex-between;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding-bottom: var(--space-4);
 
     @include mobile {
       flex-direction: column;
-      align-items: flex-start;
       gap: var(--space-3);
     }
   }
 
   .header-left {
+    @include flex-col(var(--space-1));
+  }
+
+  .header-top {
     display: flex;
     align-items: baseline;
-    gap: var(--space-4);
+    gap: var(--space-3);
   }
 
   .header-title {
-    font-size: 1.5rem;
+    font-family: $font-body;
+    font-size: 1.25rem;
     font-weight: 600;
     color: var(--color-text);
     margin: 0;
+    letter-spacing: -0.01em;
   }
 
-  .header-date-range {
-    font-size: 0.875rem;
+  .header-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.75rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .header-sep {
+    opacity: 0.4;
+  }
+
+  .header-next {
     color: var(--color-text-secondary);
   }
 
@@ -902,41 +983,59 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    flex-shrink: 0;
 
     @include mobile {
       align-self: flex-end;
     }
   }
 
+  .week-nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    background: var(--color-surface-hover);
+    border-radius: var(--radius-md);
+    padding: 2px;
+  }
+
   .nav-btn {
     @include flex-center;
-    @include touch-target;
-    padding: var(--space-2);
-    border-radius: var(--radius-md);
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-text-secondary);
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-sm);
+    border: none;
+    background: transparent;
+    color: var(--color-text-tertiary);
     cursor: pointer;
-    @include hover-surface;
+    transition:
+      color var(--transition-fast),
+      background var(--transition-fast);
+
+    &:hover {
+      color: var(--color-text);
+      background: var(--color-surface);
+    }
   }
 
   .today-btn {
-    padding: var(--space-1) var(--space-4);
-    height: 32px;
-    border-radius: var(--radius-full);
-    border: 1px solid var(--color-accent);
+    padding: 0 var(--space-3);
+    height: 26px;
+    border-radius: var(--radius-sm);
+    border: none;
     background: transparent;
-    color: var(--color-accent);
-    font-size: 0.8125rem;
+    color: var(--color-text-secondary);
+    font-size: 0.6875rem;
     font-weight: 500;
+    font-family: $font-body;
     cursor: pointer;
     transition:
-      background var(--transition-fast),
-      color var(--transition-fast);
+      color var(--transition-fast),
+      background var(--transition-fast);
 
     &:hover {
-      background: var(--color-accent);
-      color: var(--color-accent-text);
+      color: var(--color-text);
+      background: var(--color-surface);
     }
   }
 
@@ -944,102 +1043,21 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-1) var(--space-4);
-    height: 32px;
-    border-radius: var(--radius-full);
-    border: 1px solid var(--color-accent);
-    background: var(--color-accent);
-    color: var(--color-accent-text);
-    font-size: 0.8125rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition:
-      background var(--transition-fast),
-      opacity var(--transition-fast);
-
-    &:hover:not(:disabled) {
-      background: var(--color-accent-hover);
-      border-color: var(--color-accent-hover);
-    }
-
-    &:disabled {
-      opacity: var(--opacity-disabled);
-      cursor: not-allowed;
-    }
-
-    :global(.spinning) {
-      animation: spin 1s linear infinite;
-    }
-  }
-
-  .reschedule-banner {
-    padding: var(--space-3) var(--space-4);
-    background: var(--color-success-muted);
-    color: var(--color-success);
-    border-radius: var(--radius-md);
-    font-size: 0.875rem;
-    animation: fadeIn 200ms ease;
-
-    @media (prefers-reduced-motion: reduce) {
-      animation: none;
-    }
-  }
-
-  .quick-add {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex-wrap: wrap;
-    position: relative;
-  }
-
-  .quick-add-input {
-    flex: 1;
-    min-width: 200px;
-    height: 36px;
     padding: 0 var(--space-3);
-    border-radius: var(--radius-md);
+    height: 28px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--color-border);
     background: var(--color-surface);
-    color: var(--color-text);
-    font-size: 0.875rem;
-    font-family: inherit;
-    outline: none;
-    transition: border-color var(--transition-fast);
-
-    &::placeholder {
-      color: var(--color-text-tertiary);
-    }
-
-    &:focus,
-    &:focus-visible {
-      border-color: var(--color-accent);
-      outline: 2px solid var(--color-accent-muted);
-      outline-offset: -1px;
-    }
-
-    &:disabled {
-      opacity: var(--opacity-disabled);
-    }
-  }
-
-  .quick-add-btn {
-    @include flex-center;
-    width: 36px;
-    height: 36px;
-    flex-shrink: 0;
-    border-radius: var(--radius-md);
-    border: 1px solid var(--color-accent);
-    background: var(--color-accent);
-    color: var(--color-accent-text);
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    font-weight: 400;
+    font-family: $font-body;
     cursor: pointer;
-    transition:
-      background var(--transition-fast),
-      opacity var(--transition-fast);
+    transition: all var(--transition-fast);
 
     &:hover:not(:disabled) {
-      background: var(--color-accent-hover);
-      border-color: var(--color-accent-hover);
+      border-color: var(--color-accent);
+      color: var(--color-accent);
     }
 
     &:disabled {
@@ -1049,48 +1067,6 @@
 
     :global(.spinning) {
       animation: spin 1s linear infinite;
-    }
-  }
-
-  .quick-add-success {
-    font-size: 0.8125rem;
-    color: var(--color-success);
-    animation: fadeIn 200ms ease;
-
-    @media (prefers-reduced-motion: reduce) {
-      animation: none;
-    }
-  }
-
-  .quick-add-error {
-    font-size: 0.8125rem;
-    color: var(--color-danger);
-    animation: fadeIn 200ms ease;
-
-    @media (prefers-reduced-motion: reduce) {
-      animation: none;
-    }
-  }
-
-  .legend {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--space-4);
-    padding-top: var(--space-2);
-
-    &-chip {
-      display: flex;
-      align-items: center;
-      gap: var(--space-1);
-      font-size: 0.75rem;
-      color: var(--color-text-tertiary);
-    }
-
-    &-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: var(--radius-full);
-      flex-shrink: 0;
     }
   }
 </style>
