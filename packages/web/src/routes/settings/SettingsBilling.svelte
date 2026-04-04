@@ -1,194 +1,143 @@
 <script lang="ts">
-  import { billing } from '$lib/api';
-  import type { BillingStatus } from '$lib/api';
-  import { showSuccess, showError, showInfo } from '$lib/notifications.svelte';
-  import { refreshToken } from '$lib/auth.svelte';
-  import { subscribePlanUpdates } from '$lib/ws';
   import { onMount } from 'svelte';
-  import CreditCard from 'lucide-svelte/icons/credit-card';
+  import { billing, type BillingStatus } from '$lib/api';
+  import { isValidStripeUrl } from '$lib/auth.svelte';
+  import { showToast } from '$lib/toast.svelte';
+
+  import Check from 'lucide-svelte/icons/check';
   import Crown from 'lucide-svelte/icons/crown';
-  import ExternalLink from 'lucide-svelte/icons/external-link';
-  import AlertTriangle from 'lucide-svelte/icons/triangle-alert';
-  import Loader from 'lucide-svelte/icons/loader';
+  import Zap from 'lucide-svelte/icons/zap';
+  import CreditCard from 'lucide-svelte/icons/credit-card';
 
   let status = $state<BillingStatus | null>(null);
   let loading = $state(true);
-  let checkoutLoading = $state(false);
 
-  onMount(async () => {
-    // Handle billing redirect query params from Stripe checkout
-    const params = new URLSearchParams(window.location.search);
-    const billingResult = params.get('billing');
-    if (billingResult) {
-      // Clean URL immediately
-      const url = new URL(window.location.href);
-      url.searchParams.delete('billing');
-      history.replaceState(null, '', url.pathname + url.search);
+  const PRO_FEATURES = [
+    'Unlimited habits, tasks & meetings',
+    'Unlimited calendars & scheduling links',
+    '90-day scheduling window',
+    'Full analytics & quality trends',
+    'Activity log & 30-day change history',
+    'Push notifications',
+    'Priority support',
+  ];
 
-      if (billingResult === 'success') {
-        // Refresh JWT so the updated plan is in the token
-        await refreshToken();
-        showSuccess('Upgrade successful! You now have Pro.');
-      } else if (billingResult === 'cancel') {
-        showInfo('Checkout cancelled. You can upgrade anytime.');
-      }
-    }
-
+  async function loadBilling() {
     try {
       status = await billing.status();
     } catch {
-      showError('Failed to load billing info');
+      // silent
     } finally {
       loading = false;
     }
-  });
+  }
 
   async function handleUpgrade(interval: 'monthly' | 'annual') {
-    checkoutLoading = true;
     try {
       const { url } = await billing.checkout(interval);
-      if (url) window.location.href = url;
-    } catch {
-      showError('Failed to start checkout');
-    } finally {
-      checkoutLoading = false;
+      if (!isValidStripeUrl(url)) {
+        showToast('Invalid checkout URL', 'error');
+        return;
+      }
+      window.location.href = url;
+    } catch (err) {
+      if (err instanceof Error && !('handled' in err)) {
+        showToast('Failed to start checkout', 'error');
+      }
     }
   }
 
-  async function handleManage() {
+  async function openPortal() {
     try {
       const { url } = await billing.portal();
-      if (url) window.location.href = url;
-    } catch {
-      showError('Failed to open billing portal');
+      if (!isValidStripeUrl(url)) {
+        showToast('Invalid billing portal URL', 'error');
+        return;
+      }
+      window.location.href = url;
+    } catch (err) {
+      if (err instanceof Error && !('handled' in err)) {
+        showToast('Failed to open billing portal', 'error');
+      }
     }
   }
 
-  const isPro = $derived(status?.plan === 'pro');
-  const isTrial = $derived(status?.isTrial ?? false);
-  const trialExpired = $derived(
-    isTrial && status?.trialDaysRemaining != null && status?.trialDaysRemaining === 0,
-  );
-
-  $effect(() => {
-    const unsubPlan = subscribePlanUpdates(async () => {
-      await refreshToken();
-      try {
-        status = await billing.status();
-      } catch {
-        // Silently fail — billing section will show stale data
-      }
-    });
-    return unsubPlan;
+  onMount(() => {
+    loadBilling();
   });
 </script>
 
-<section aria-labelledby="billing-heading" class="settings-section">
-  <h2 id="billing-heading" class="section-heading section-heading--icon">
-    <CreditCard size={16} aria-hidden="true" /> Billing
-  </h2>
+<section class="settings-section" data-setting-id="billing-plan">
+  <h3>Billing</h3>
 
   {#if loading}
-    <p class="text-hint">Loading billing info...</p>
+    <p class="text-secondary">Loading...</p>
   {:else if status}
-    {#if status.paymentStatus === 'past_due'}
-      <div class="payment-banner payment-banner--warning" role="alert">
-        <AlertTriangle size={16} />
-        <div class="payment-banner-content">
-          <p>
-            Your last payment didn't go through. We're retrying automatically. Please update your
-            payment method to avoid interruption.
-          </p>
-          <button class="payment-banner-btn" onclick={handleManage}>Update Payment Method</button>
-        </div>
-      </div>
-    {:else if status.paymentStatus === 'failed'}
-      <div class="payment-banner payment-banner--error" role="alert">
-        <AlertTriangle size={16} />
-        <div class="payment-banner-content">
-          <p>Payment failed. Update your payment method to keep your Pro features.</p>
-          <button class="payment-banner-btn payment-banner-btn--error" onclick={handleManage}
-            >Update Payment Method</button
+    <div class="plan-card plan-card-pro">
+      <div class="plan-card-header">
+        <div class="plan-badge-row">
+          <Crown size={18} />
+          <span class="plan-name"
+            >{status.selfHosted ? 'Self-Hosted' : status.plan === 'pro' ? 'Pro' : 'Free'}</span
           >
         </div>
+        {#if !status.selfHosted && status.isTrial && status.trialDaysRemaining !== null}
+          <span class="trial-badge">Trial — {status.trialDaysRemaining} days left</span>
+        {/if}
+        {#if !status.selfHosted && status.cancelAtPeriodEnd}
+          <span class="cancel-badge">Cancels at period end</span>
+        {/if}
       </div>
-    {/if}
 
-    <div class="plan-badge" class:plan-badge--pro={isPro} class:plan-badge--trial={isTrial}>
-      <Crown size={14} />
-      {#if isTrial}
-        <span
-          >Pro Trial — {status.trialDaysRemaining}
-          {status.trialDaysRemaining === 1 ? 'day' : 'days'} remaining</span
-        >
+      {#if status.selfHosted}
+        <p class="plan-desc">
+          You have full access to all Fluxure features with your self-hosted installation.
+        </p>
+      {:else if status.plan === 'pro' && status.hasSubscription}
+        <p class="plan-desc">You have full access to all Fluxure features.</p>
+        {#if status.periodEnd}
+          <p class="period-info">
+            Current period ends {new Date(status.periodEnd).toLocaleDateString(undefined, {
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric',
+            })}
+          </p>
+        {/if}
+        <button class="btn-secondary manage-btn" onclick={openPortal}>
+          <CreditCard size={14} />
+          Manage subscription
+        </button>
       {:else}
-        <span>{isPro ? 'Pro' : 'Free'} Plan</span>
+        <p class="plan-desc">You're on the Free plan with limited habits, tasks, and calendars.</p>
       {/if}
     </div>
 
-    {#if isPro && !isTrial}
-      <div class="plan-details">
-        {#if status.cancelAtPeriodEnd}
-          <div class="cancel-warning" role="alert">
-            <p class="cancel-warning-text">
-              Your Pro plan will end on {new Date(
-                status.cancelAt ?? status.periodEnd ?? '',
-              ).toLocaleDateString()}. You'll be downgraded to Free after this date.
-            </p>
-            <button class="btn-resubscribe" onclick={handleManage}>
-              Resubscribe <ExternalLink size={14} />
-            </button>
-          </div>
-        {:else}
-          <p class="text-hint">
-            Billed {status.billingInterval === 'annual' ? 'annually' : 'monthly'}
-            {#if status.periodEnd}
-              &middot; Renews {new Date(status.periodEnd).toLocaleDateString()}
-            {/if}
-          </p>
-        {/if}
-        <button class="btn-cancel" onclick={handleManage}>
-          Manage Subscription <ExternalLink size={14} />
-        </button>
-      </div>
-    {:else}
-      <div class="upgrade-options">
-        {#if trialExpired}
-          <p class="trial-expired-msg">Your trial has ended — upgrade to keep Pro features.</p>
-        {:else if isTrial}
-          <p class="text-hint">Upgrade now to keep Pro features after your trial ends.</p>
-        {:else}
-          <p class="text-hint">
-            Unlock unlimited habits, tasks, meetings, calendars, analytics, and more.
-          </p>
-        {/if}
-        <div class="price-cards">
+    {#if !status.selfHosted && !(status.plan === 'pro' && status.hasSubscription)}
+      <div class="upgrade-section">
+        <h4>Upgrade to Pro</h4>
+        <ul class="feature-list">
+          {#each PRO_FEATURES as feature (feature)}
+            <li class="feature-item">
+              <span class="feature-check"><Check size={14} /></span>
+              <span>{feature}</span>
+            </li>
+          {/each}
+        </ul>
+
+        <div class="pricing-cards">
           <button
-            class="price-card"
-            onclick={() => handleUpgrade('monthly')}
-            disabled={checkoutLoading}
-          >
-            {#if checkoutLoading}
-              <Loader size={20} class="spinning" />
-              <span class="checkout-redirect">Redirecting to Stripe...</span>
-            {:else}
-              <span class="price">$9</span>
-              <span class="interval">/month</span>
-            {/if}
-          </button>
-          <button
-            class="price-card price-card--recommended"
+            class="pricing-card pricing-card-highlight"
             onclick={() => handleUpgrade('annual')}
-            disabled={checkoutLoading}
           >
-            {#if checkoutLoading}
-              <Loader size={20} class="spinning" />
-              <span class="checkout-redirect">Redirecting to Stripe...</span>
-            {:else}
-              <span class="save-badge">Save 22%</span>
-              <span class="price">$7</span>
-              <span class="interval">/month, billed annually</span>
-            {/if}
+            <span class="pricing-interval">Annual</span>
+            <span class="pricing-amount">$7<span class="pricing-unit">/mo</span></span>
+            <span class="pricing-save">Save 22%</span>
+          </button>
+          <button class="pricing-card" onclick={() => handleUpgrade('monthly')}>
+            <span class="pricing-interval">Monthly</span>
+            <span class="pricing-amount">$9<span class="pricing-unit">/mo</span></span>
+            <span class="pricing-save">&nbsp;</span>
           </button>
         </div>
       </div>
@@ -197,204 +146,165 @@
 </section>
 
 <style lang="scss">
+  @use '$lib/styles/variables' as *;
   @use '$lib/styles/mixins' as *;
 
-  .section-heading--icon {
+  .settings-section {
+    @include flex-col(var(--space-4));
+  }
+
+  .plan-card {
+    @include flex-col(var(--space-3));
+    padding: var(--space-5);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+  }
+
+  .plan-card-pro {
+    border-color: var(--color-accent);
+    background: var(--color-accent-muted);
+  }
+
+  .plan-card-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .plan-badge-row {
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    color: var(--color-accent);
   }
 
-  .plan-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: 0.375rem 0.75rem;
-    border-radius: var(--radius-md);
+  .plan-name {
+    font-family: $font-heading;
     font-weight: 600;
+    font-size: 1.25rem;
+    color: var(--color-text);
+  }
+
+  .trial-badge,
+  .cancel-badge {
+    @include badge;
+    background: var(--color-warning-amber-bg);
+    color: var(--color-warning-amber);
+    font-size: 0.6875rem;
+  }
+
+  .plan-desc {
     font-size: 0.875rem;
-    background: var(--color-surface-hover);
     color: var(--color-text-secondary);
-    margin-bottom: var(--space-4);
-
-    &--pro {
-      background: var(--color-accent-muted);
-      color: var(--color-accent);
-    }
-
-    &--trial {
-      background: var(--color-warning-bg);
-      color: var(--color-warning);
-    }
+    line-height: 1.5;
   }
 
-  .trial-expired-msg {
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--color-danger);
-    margin: 0 0 var(--space-2);
+  .period-info {
+    font-size: 0.8125rem;
+    color: var(--color-text-tertiary);
   }
 
-  .cancel-warning {
-    padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-md);
-    background: var(--color-warning-bg);
-    border: 1px solid var(--color-warning);
-    margin-bottom: var(--space-3);
-  }
-
-  .cancel-warning-text {
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--color-warning);
-    margin: 0 0 var(--space-3);
-  }
-
-  .btn-resubscribe {
-    display: inline-flex;
+  .manage-btn {
+    align-self: flex-start;
+    display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-2) var(--space-4);
-    border: none;
-    border-radius: var(--radius-md);
-    background: var(--color-accent);
-    color: var(--color-accent-text);
-    font-size: 0.8125rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity var(--transition-fast);
-
-    &:hover {
-      opacity: 0.9;
-    }
+    margin-top: var(--space-1);
   }
 
-  .plan-details {
+  .text-secondary {
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+  }
+
+  .upgrade-section {
+    @include flex-col(var(--space-4));
+  }
+
+  h4 {
+    font-size: 0.9375rem;
+    color: var(--color-text-secondary);
+  }
+
+  .feature-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    @include flex-col(var(--space-2));
+  }
+
+  .feature-item {
     display: flex;
-    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.8125rem;
+    color: var(--color-text-secondary);
+  }
+
+  .feature-check {
+    display: flex;
+    color: var(--color-success);
+    flex-shrink: 0;
+  }
+
+  .pricing-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: var(--space-3);
   }
 
-  .upgrade-options {
-    margin-top: var(--space-2);
-  }
-
-  .price-cards {
-    display: flex;
-    gap: var(--space-4);
-    margin-top: var(--space-4);
-  }
-
-  .price-card {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
+  .pricing-card {
+    @include flex-col(var(--space-1));
     align-items: center;
-    padding: var(--space-6) var(--space-4);
+    padding: var(--space-5) var(--space-4);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
     background: var(--color-surface);
     cursor: pointer;
-    transition: border-color var(--transition-fast);
-    position: relative;
+    font-family: $font-body;
+    transition:
+      border-color var(--transition-fast),
+      background var(--transition-fast);
 
     &:hover {
-      border-color: var(--color-accent);
-    }
-
-    &--recommended {
       border-color: var(--color-accent);
       background: var(--color-accent-muted);
     }
-
-    &:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
   }
 
-  .price {
-    font-size: 2rem;
-    font-weight: 700;
-    color: var(--color-text);
+  .pricing-card-highlight {
+    border-color: var(--color-accent);
+    background: var(--color-accent-muted);
+    position: relative;
   }
 
-  .interval {
-    font-size: 0.8125rem;
-    color: var(--color-text-secondary);
-    margin-top: var(--space-1);
-  }
-
-  .save-badge {
-    position: absolute;
-    top: -0.625rem;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    padding: 0.125rem 0.5rem;
-    border-radius: var(--radius-sm);
-    background: var(--color-accent);
-    color: var(--color-accent-text);
-  }
-
-  .checkout-redirect {
-    font-size: 0.8125rem;
+  .pricing-interval {
+    font-size: 0.75rem;
     font-weight: 500;
     color: var(--color-text-secondary);
-    margin-top: var(--space-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
-  .payment-banner {
-    display: flex;
-    gap: var(--space-3);
-    padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-md);
-    margin-bottom: var(--space-4);
-    align-items: flex-start;
-
-    &--warning {
-      background: var(--color-warning-bg);
-      border: 1px solid var(--color-warning);
-      color: var(--color-warning);
-    }
-
-    &--error {
-      background: var(--color-danger-muted);
-      border: 1px solid var(--color-danger);
-      color: var(--color-danger);
-    }
-  }
-
-  .payment-banner-content {
-    flex: 1;
-
-    p {
-      margin: 0 0 var(--space-3);
-      font-size: 0.8125rem;
-      font-weight: 500;
-      line-height: 1.4;
-    }
-  }
-
-  .payment-banner-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-1) var(--space-3);
-    border: none;
-    border-radius: var(--radius-sm);
-    background: var(--color-warning);
-    color: var(--color-accent-text);
-    font-size: 0.75rem;
+  .pricing-amount {
+    font-family: $font-heading;
     font-weight: 600;
-    cursor: pointer;
-    transition: opacity var(--transition-fast);
+    font-size: 1.75rem;
+    color: var(--color-text);
+    letter-spacing: -0.02em;
+  }
 
-    &:hover {
-      opacity: 0.9;
-    }
+  .pricing-unit {
+    font-size: 0.875rem;
+    font-weight: 400;
+    color: var(--color-text-secondary);
+  }
 
-    &--error {
-      background: var(--color-danger);
-    }
+  .pricing-save {
+    font-size: 0.6875rem;
+    color: var(--color-success);
+    font-weight: 500;
   }
 </style>
