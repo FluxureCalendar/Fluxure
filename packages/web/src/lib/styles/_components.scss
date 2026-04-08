@@ -1,820 +1,510 @@
+@use 'variables' as *;
 @use 'mixins' as *;
 
-// ============================================
-//   Visually Hidden (screen-reader only)
-// ============================================
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-// ============================================
-//   Buttons
-// ============================================
-
-.btn-accent-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
+// ============================================================
+// Buttons — whisper, don't shout
+// ============================================================
+.btn-primary {
+  @include btn-base;
+  border: none;
   background: var(--color-accent);
   color: var(--color-accent-text);
-  font-size: 0.875rem;
-  font-weight: 500;
-  border: none;
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  transition: background var(--transition-fast);
+  transition: background-color var(--transition-fast);
+
   &:hover {
     background: var(--color-accent-hover);
   }
 }
 
-.btn-save {
-  padding: var(--space-2) var(--space-5);
-  background: var(--color-accent);
-  color: var(--color-accent-text);
-  font-size: 0.875rem;
-  font-weight: 500;
-  border: none;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: background var(--transition-fast);
+.btn-secondary {
+  @include btn-base;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  transition: background-color var(--transition-fast);
+
   &:hover {
-    background: var(--color-accent-hover);
-  }
-  &:disabled {
-    opacity: var(--opacity-disabled);
-    cursor: not-allowed;
-  }
-}
-
-.btn-cancel {
-  padding: var(--space-2) var(--space-5);
-  background: none;
-  color: var(--color-text-secondary);
-  font-size: 0.875rem;
-  font-weight: 500;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  @include hover-surface;
-}
-
-.btn-action {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: none;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  @include hover-surface;
-  &:disabled {
-    opacity: var(--opacity-disabled);
-    cursor: not-allowed;
+    background: var(--color-surface-hover);
+    color: var(--color-text);
   }
 }
 
 .btn-danger {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-danger);
+  @include btn-base;
+  border: 1px solid var(--color-border);
   background: transparent;
   color: var(--color-danger);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
+  transition: background-color var(--transition-fast);
 
-  &:hover:not(:disabled) {
-    background: var(--color-danger);
-    color: var(--color-accent-text);
-  }
-
-  &:disabled {
-    opacity: var(--opacity-disabled);
-    cursor: not-allowed;
-  }
-}
-
-.btn-danger-outline {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-danger);
-  background: none;
-  color: var(--color-danger);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
-
-  &:hover:not(:disabled) {
+  &:hover {
     background: var(--color-danger-muted);
   }
-
-  &:disabled {
-    opacity: var(--opacity-disabled);
-    cursor: not-allowed;
-  }
 }
 
-// ============================================
-//   Alerts
-// ============================================
-
-.alert-error,
-.error-banner {
-  margin-bottom: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  background: var(--color-danger-muted);
-  border: 1px solid var(--color-danger);
-  border-radius: var(--radius-md);
-  color: var(--color-danger);
-  font-size: 0.875rem;
-}
-
-.alert-success {
-  margin-bottom: var(--space-4);
-  padding: var(--space-2) var(--space-4);
-  background: var(--color-success-muted);
-  color: var(--color-success);
-  border-radius: var(--radius-md);
-  font-size: 0.875rem;
-}
-
-// ============================================
-//   Empty State
-// ============================================
-
-.empty-state {
-  @include flex-col;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-16) var(--space-6);
+.btn-ghost {
+  @include btn-base;
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--color-text-tertiary);
-}
+  transition: color var(--transition-fast);
 
-.empty-state-title {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: var(--color-text);
-  margin-top: var(--space-4);
-}
-
-.empty-state-desc {
-  color: var(--color-text-secondary);
-  margin-top: var(--space-2);
-}
-
-.empty-state-btn {
-  margin-top: var(--space-5);
-}
-
-// ============================================
-//   Table
-// ============================================
-
-.table-header {
-  display: grid;
-  padding: var(--space-2) var(--space-4);
-  @include mono-label;
-  color: var(--color-text-tertiary);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.table-row {
-  position: relative;
-  display: grid;
-  align-items: center;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--color-border);
-  transition: background var(--transition-fast);
   &:hover {
-    background: var(--color-surface-hover);
-  }
-}
-
-.row-actions {
-  position: absolute;
-  right: var(--space-4);
-  top: 50%;
-  transform: translateY(-50%);
-  display: none;
-  align-items: center;
-  gap: var(--space-1);
-  .table-row:hover &,
-  .table-row:focus-within & {
-    display: flex;
-  }
-}
-
-.row-action-btn {
-  @include flex-center;
-  width: 32px;
-  height: 32px;
-  @include touch-target;
-  border: none;
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
-  &:hover {
-    background: var(--color-surface-active);
     color: var(--color-text);
-  }
-  &:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
-  }
-  &--danger:hover {
-    background: var(--color-danger-muted);
-    color: var(--color-danger);
+    border-color: var(--color-border);
   }
 }
 
-// ============================================
-//   Priority Badges
-// ============================================
-
-.priority-badge {
-  @include badge;
-}
-
-.priority-1 {
-  background: var(--color-danger-muted);
-  color: var(--color-danger);
-}
-.priority-2 {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
-}
-.priority-3 {
-  background: var(--color-accent-muted);
-  color: var(--color-accent);
-}
-.priority-4 {
-  background: var(--color-surface-hover);
-  color: var(--color-text-tertiary);
-}
-
-// ============================================
-//   Loading State
-// ============================================
-
-.loading-state,
-.loading-container {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-10) 0;
-  color: var(--color-text-secondary);
-  font-size: 0.875rem;
-}
-
-// ============================================
-//   Panel (Slide-over)
-// ============================================
-
-.panel-backdrop {
-  @include backdrop;
-  z-index: $z-panel - 1;
-}
-
-.panel-slideover {
-  @include slideover;
-}
-
-.panel-header {
-  @include flex-between;
-  padding: var(--space-4) var(--space-6);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.panel-title {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.panel-close-btn {
-  @include icon-btn;
-  color: var(--color-text-secondary);
-}
-
-.panel-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-6);
-  @include flex-col(var(--space-4));
-}
-
-.panel-footer {
-  display: flex;
-  gap: var(--space-3);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--color-border);
-  margin-top: var(--space-2);
-}
-
-// ============================================
-//   Form Fields
-// ============================================
-
+// ============================================================
+// Form Elements — thin, airy, barely there
+// ============================================================
 .form-field {
   @include flex-col(var(--space-1));
-  label,
-  .form-label {
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: var(--color-text-secondary);
+}
+
+.form-label {
+  @include label;
+  color: var(--color-text-secondary);
+}
+
+.form-input,
+.form-select,
+.form-textarea {
+  width: 100%;
+  padding: 6px var(--space-3);
+  background: var(--color-surface);
+  border: none;
+  box-shadow: 0 0 0 1px var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-family: $font-body;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  transition: box-shadow var(--transition-fast);
+
+  &::placeholder {
+    color: var(--color-text-tertiary);
   }
-  input,
-  select,
-  textarea {
-    padding: var(--space-2) var(--space-3);
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    color: var(--color-text);
-    font-size: 0.875rem;
-    transition: border-color var(--transition-fast);
-    &:focus,
-    &:focus-visible {
-      border-color: var(--color-accent);
-      outline: 2px solid var(--color-accent-muted);
-      outline-offset: -1px;
-    }
+
+  &:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-accent);
   }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
+.form-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%239AA0A4' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 16px 12px;
+  padding-right: 32px;
+}
+
+.form-textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.form-error {
+  color: var(--color-danger);
+  font-size: 0.75rem;
+  line-height: 1.4;
 }
 
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-4);
-  @include small {
+
+  @include mobile {
     grid-template-columns: 1fr;
   }
 }
 
-// ============================================
-//   Kebab Menu (shared across table pages)
-// ============================================
-
-.kebab-cell {
-  position: relative;
-  @include flex-center;
-}
-
-.kebab-btn {
-  @include icon-btn(28px);
-  color: var(--color-text-tertiary);
-  opacity: 0;
-  transition:
-    opacity var(--transition-fast),
-    background var(--transition-fast),
-    color var(--transition-fast);
-  .table-row:hover &,
-  .table-row:focus-within & {
-    opacity: 1;
-  }
-  &:hover {
-    background: var(--color-surface);
-    color: var(--color-text);
-  }
-}
-
-.kebab-menu {
-  @include dropdown-menu;
-  top: 100%;
-  right: 0;
-  min-width: 160px;
-}
-
-.kebab-menu-item {
-  @include menu-item;
-  &--danger {
-    @include menu-item-danger;
-  }
-}
-
-// ============================================
-//   Inline Confirm (shared delete confirmation)
-// ============================================
-
-.confirm-menu {
-  @include flex-col(var(--space-1));
-  padding: var(--space-1);
-}
-
-.confirm-text {
-  padding: var(--space-2) var(--space-3);
-  font-size: 0.8125rem;
+// ============================================================
+// Tables — quiet rows, not spreadsheets
+// ============================================================
+.table-header {
+  @include flex-between;
+  padding: var(--space-2) 0;
   font-weight: 500;
-  color: var(--color-text);
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  color: var(--color-text-tertiary);
 }
 
-.confirm-actions {
-  display: flex;
-  gap: var(--space-1);
-}
-
-.btn-confirm-yes {
-  @include menu-item;
-  @include menu-item-danger;
-}
-
-.btn-confirm-no {
-  @include menu-item;
-}
-
-// ============================================
-//   Color Picker (shared across item pages)
-// ============================================
-
-.color-picker {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.color-swatch {
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-full);
-  border: 2px solid transparent;
-  cursor: pointer;
-  padding: 0;
+.table-row {
+  @include flex-between;
+  @include stagger-in;
+  padding: var(--space-3) 0;
+  font-size: 0.875rem;
+  border-left: 2px solid transparent;
+  margin-left: calc(-1 * var(--space-3));
+  padding-left: var(--space-3);
   transition:
     border-color var(--transition-fast),
-    box-shadow var(--transition-fast);
+    background-color var(--transition-fast);
+
   &:hover {
-    outline: 2px solid var(--color-border-strong);
-    outline-offset: 1px;
-  }
-  &--active {
-    outline: 2px solid var(--color-text);
-    outline-offset: 1px;
-  }
-  // !important is intentional here to override the inline `style="background: ..."` attribute
-  &--none {
-    background: var(--color-surface-hover) !important;
-    @include flex-center;
-    font-size: 10px;
-    color: var(--color-text-tertiary);
-    line-height: 1;
+    border-left-color: var(--color-accent);
+    background: var(--color-surface-hover);
+    margin: 0 calc(-1 * var(--space-3));
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
   }
 }
 
-// ============================================
-//   Toggle Button (icon toggle, e.g. lock/enable)
-// ============================================
+.row-actions {
+  display: flex;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
 
-.toggle-btn {
+  .table-row:hover & {
+    opacity: 0.5;
+  }
+  .table-row:hover &:hover {
+    opacity: 1;
+  }
+
+  button {
+    @include icon-btn(28px);
+  }
+
+  .row-action-danger {
+    &:hover {
+      color: var(--color-danger);
+      background: var(--color-danger-muted);
+    }
+  }
+}
+
+// ============================================================
+// Badges — just colored text, no pills
+// ============================================================
+.badge {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-accent);
+}
+
+.badge-success {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-success);
+}
+
+.badge-warning {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-warning);
+}
+
+.badge-danger {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-danger);
+}
+
+.badge-amber {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-warning-amber);
+}
+
+// ============================================================
+// Empty State — intimate, not imposing
+// ============================================================
+.empty-state {
   @include flex-center;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-  @include touch-target;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-16) var(--space-6);
+  color: var(--color-text-tertiary);
+  text-align: center;
+
+  .empty-icon {
+    opacity: 0.25;
+    margin-bottom: var(--space-2);
+  }
+
+  .empty-title {
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+  }
+
+  .empty-desc {
+    font-size: 0.8125rem;
+    max-width: 300px;
+    line-height: 1.5;
+  }
 }
 
-// ============================================
-//   Toggle Switch (on/off slider)
-// ============================================
+// ============================================================
+// Skeleton Loader
+// ============================================================
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-border) 0%,
+    var(--color-surface-hover) 50%,
+    var(--color-border) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--radius-md);
+  animation: skeletonSweep 1.5s ease-in-out infinite;
+}
 
+.skeleton-line {
+  height: 14px;
+  margin-bottom: var(--space-2);
+  background: linear-gradient(
+    90deg,
+    var(--color-border) 0%,
+    var(--color-surface-hover) 50%,
+    var(--color-border) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--radius-sm);
+  animation: skeletonSweep 1.5s ease-in-out infinite;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+// ============================================================
+// Loading States
+// ============================================================
+.loading-spinner {
+  animation: spin 1s linear infinite;
+  color: var(--color-text-tertiary);
+}
+
+// ============================================================
+// Slide-Over Panel — soft, less chrome
+// ============================================================
+.slideover-backdrop {
+  @include backdrop;
+  backdrop-filter: blur(2px);
+}
+
+.slideover {
+  @include slideover;
+}
+
+.slideover-header {
+  @include flex-between;
+  padding: var(--space-6);
+  flex-shrink: 0;
+
+  h3 {
+    font-size: 1.25rem;
+  }
+}
+
+.slideover-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--space-6) var(--space-6);
+}
+
+.slideover-footer {
+  display: flex;
+  align-items: center;
+  padding: var(--space-4) var(--space-6);
+  flex-shrink: 0;
+  gap: var(--space-3);
+  justify-content: flex-end;
+}
+
+// Toast styles are now scoped in Toast.svelte
+
+// ============================================================
+// Kebab Menu — lighter
+// ============================================================
+.kebab-menu {
+  position: relative;
+}
+
+.kebab-trigger {
+  @include icon-btn(28px);
+}
+
+.kebab-dropdown {
+  @include dropdown;
+  right: 0;
+  top: 100%;
+  margin-top: var(--space-1);
+}
+
+// ============================================================
+// Toggle Switch
+// ============================================================
 .toggle-switch {
   position: relative;
   width: 36px;
   height: 20px;
   border-radius: var(--radius-full);
-  border: none;
-  background: var(--color-border-strong);
-  cursor: pointer;
-  transition: background var(--transition-fast);
-
-  &--on {
-    background: var(--color-accent);
-  }
-}
-
-.toggle-switch input:focus-visible + .toggle-track {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-.toggle-switch-knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent-text);
-  transition: left var(--transition-fast);
-
-  &--on {
-    left: 18px;
-  }
-}
-
-// ============================================
-//   Calendar Table (shared: settings + onboarding)
-// ============================================
-
-.cal-table,
-.wizard-cal-table {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-
-.cal-row {
-  @include flex-between;
-  padding: var(--space-2) var(--space-3);
-
-  &--bordered {
-    border-top: 1px solid var(--color-border);
-  }
-}
-
-.cal-info {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  flex: 1;
-}
-
-.cal-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: var(--radius-full);
-  flex-shrink: 0;
-}
-
-.cal-name {
-  font-size: 0.8125rem;
-  color: var(--color-text);
-  @include text-truncate;
-}
-
-.cal-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-shrink: 0;
-}
-
-.cal-mode-select {
-  font-size: 0.75rem;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.cal-primary-badge {
-  font-size: 0.6875rem;
-  font-weight: 500;
-  color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
-  padding: 1px var(--space-1);
-  border-radius: var(--radius-sm);
-  flex-shrink: 0;
-}
-
-.cal-always-on {
-  font-size: 0.75rem;
-  color: var(--color-text-tertiary);
-  font-style: italic;
-  flex-shrink: 0;
-}
-
-// ============================================
-//   Spinning animation (shared utility)
-// ============================================
-
-.spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-// ============================================
-//   Page Layout (shared header / title)
-// ============================================
-
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-6);
-}
-
-.page-title {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-// ============================================
-//   Misc Shared
-// ============================================
-
-.toggle-label {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: 0.875rem;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.hide-mobile {
-  @include mobile {
-    display: none !important;
-  }
-}
-
-.skip-link {
-  position: fixed;
-  top: -100%;
-  left: var(--space-4);
-  z-index: 9999;
-  padding: var(--space-2) var(--space-4);
-  background: var(--color-accent);
-  color: var(--color-accent-text);
-  font-size: 0.875rem;
-  font-weight: 500;
-  border-radius: var(--radius-md);
-  text-decoration: none;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    top var(--transition-fast),
-    opacity var(--transition-fast);
-  &:focus {
-    top: var(--space-4);
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
-// ============================================
-//   Entity page shared styles
-// ============================================
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.usage-counter {
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-
-  &--warn {
-    color: var(--color-warning-amber);
-    font-weight: 600;
-  }
-}
-
-.frozen {
-  opacity: var(--opacity-disabled);
-  pointer-events: none;
-}
-
-.frozen-badge {
-  @include badge;
-  gap: 3px;
-  font-size: 0.6875rem;
-  font-weight: 500;
-  color: var(--color-warning-amber);
-  padding: 1px 6px;
-  border: 1px solid var(--color-warning-amber);
-  white-space: nowrap;
-  pointer-events: auto;
-  text-decoration: none;
-}
-
-.loading-text {
-  color: var(--color-text-secondary);
-}
-
-// ============================================
-//   Icon Color Utilities
-// ============================================
-
-.icon-tertiary {
-  color: var(--color-text-tertiary);
-}
-
-.icon-accent {
-  color: var(--color-accent);
-}
-
-.icon-muted {
-  color: var(--color-text-secondary);
-}
-
-// ============================================
-//   Settings shared styles
-// ============================================
-
-.settings-section {
-  padding: var(--space-8) 0;
-}
-
-.section-heading {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--color-text);
-  margin: 0 0 var(--space-4) 0;
-
-  &--inline {
-    margin-bottom: 0;
-  }
-
-  &--danger {
-    color: var(--color-danger);
-  }
-}
-
-.section-divider {
-  border: none;
-  height: 1px;
   background: var(--color-border);
-  margin: 0;
+  border: none;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+  flex-shrink: 0;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: white;
+    transition: transform var(--transition-fast);
+  }
+
+  &.toggle-on {
+    background: var(--color-accent);
+
+    &::after {
+      transform: translateX(16px);
+    }
+  }
 }
 
-.text-hint {
-  font-size: 0.8125rem;
+// ============================================================
+// Color Picker
+// ============================================================
+.color-picker {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.color-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+
+  &:hover,
+  &.color-selected {
+    border-color: var(--color-accent);
+  }
+}
+
+// ============================================================
+// Page Header — tighter, less imposing
+// ============================================================
+// Search deep link highlight animation
+.highlight-pulse,
+.setting-highlight {
+  animation: highlightPulse 2s ease-out;
+  border-radius: var(--radius-md);
+}
+
+@keyframes highlightPulse {
+  0% {
+    background-color: var(--color-accent-subtle, rgba(66, 133, 244, 0.15));
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+// ============================================================
+// Page Header — tighter, less imposing
+// ============================================================
+.page-header {
+  @include flex-between;
+  margin-bottom: var(--space-8);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-separator);
+
+  h1 {
+    font-family: $font-body;
+    font-weight: 600;
+    font-size: 1.5rem;
+    letter-spacing: -0.01em;
+  }
+
+  .page-actions {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+  }
+
+  @include mobile {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+
+    h1 {
+      font-size: 1.375rem;
+    }
+  }
+}
+
+// ============================================================
+// Entity Chip — small pill used in entity cards
+// ============================================================
+.entity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.625rem;
   color: var(--color-text-tertiary);
-  margin: 0;
-}
+  background: var(--color-surface-hover);
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
 
-// ============================================
-//   Animations
-// ============================================
-
-@keyframes slideIn {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
+  :global(svg) {
+    flex-shrink: 0;
   }
 }
 
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
+.entity-chip-paused {
+  color: var(--color-warning);
+  background: var(--color-warning-muted);
+}
+
+.entity-chip-overdue {
+  color: var(--color-danger);
+  background: var(--color-danger-muted);
+}
+
+.entity-chip-done {
+  color: var(--color-success);
+  background: var(--color-success-muted);
+}
+
+// ============================================================
+// Entry Animations — shared across pages
+// ============================================================
+.card-enter {
+  animation: contentEnter 300ms ease both;
+  animation-delay: calc(250ms + var(--i, 0) * 50ms);
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
   }
-  to {
-    opacity: 1;
-    transform: scale(1);
+}
+
+.content-enter {
+  animation: contentEnter 300ms ease both;
+  animation-delay: 250ms;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
   }
 }

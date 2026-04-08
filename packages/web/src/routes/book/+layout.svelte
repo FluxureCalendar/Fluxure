@@ -1,80 +1,95 @@
 <script lang="ts">
-  import '$lib/styles/main.scss';
+  import type { Snippet } from 'svelte';
   import { BRAND } from '@fluxure/shared';
 
-  let { children } = $props();
+  let {
+    children,
+  }: {
+    children: Snippet;
+  } = $props();
 </script>
 
-<div class="booking-shell">
-  <a class="skip-link" href="#main-content">Skip to content</a>
-  <header class="booking-header" aria-label="Fluxure">
-    <span class="booking-logo">F</span>
-    <span class="booking-brand">{BRAND.name}</span>
+<div class="booking-layout">
+  <header class="booking-header">
+    <a href="/" class="booking-logo">
+      <img src="/logo-mark.svg" alt="" width="28" height="28" />
+      <span class="booking-wordmark">fluxure</span>
+    </a>
   </header>
-  <main class="booking-main" id="main-content">
+
+  <main class="booking-main">
     {@render children()}
   </main>
+
   <footer class="booking-footer">
-    <span>Powered by {BRAND.name}</span>
+    <span>&copy; {new Date().getFullYear()} Fluxure</span>
+    <span class="booking-sep">&middot;</span>
+    <a href="{BRAND.landingUrl}/privacy" target="_blank" rel="noopener noreferrer">Privacy</a>
+    <span class="booking-sep">&middot;</span>
+    <a href="{BRAND.landingUrl}/terms" target="_blank" rel="noopener noreferrer">Terms</a>
   </footer>
 </div>
 
 <style lang="scss">
   @use '$lib/styles/mixins' as *;
 
-  .booking-shell {
+  .booking-layout {
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
     background: var(--color-bg);
-    @include flex-col;
-    align-items: center;
   }
 
   .booking-header {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
+    justify-content: center;
     padding: var(--space-4) var(--space-6);
-    width: 100%;
-    max-width: 560px;
   }
 
   .booking-logo {
-    @include flex-center;
-    width: 28px;
-    height: 28px;
-    background: var(--color-accent);
-    color: var(--color-accent-text);
-    border-radius: var(--radius-md);
-    font-weight: 700;
-    font-size: 14px;
-    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    text-decoration: none;
+    color: var(--color-text);
+    opacity: 0.6;
   }
 
-  .booking-brand {
+  .booking-wordmark {
+    font-family: var(--font-heading, 'Fraunces', Georgia, serif);
     font-weight: 600;
-    font-size: 15px;
-    color: var(--color-text);
+    font-size: 1.0625rem;
+    letter-spacing: -0.01em;
   }
 
   .booking-main {
     flex: 1;
-    width: 100%;
-    max-width: 560px;
-    padding: 0 var(--space-6);
+    display: flex;
+    justify-content: center;
+    padding: var(--space-8) var(--space-4);
   }
 
   .booking-footer {
-    padding: var(--space-6);
-    color: var(--color-text-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-6);
     font-size: 0.75rem;
+    color: var(--color-text-tertiary);
+
+    a {
+      color: var(--color-text-tertiary);
+      text-decoration: none;
+
+      &:hover {
+        color: var(--color-accent);
+      }
+    }
   }
 
-  @include mobile {
-    .booking-header {
-      padding: var(--space-3) var(--space-4);
-    }
-    .booking-main {
-      padding: 0 var(--space-4);
-    }
+  .booking-sep {
+    color: var(--color-text-tertiary);
   }
 </style>

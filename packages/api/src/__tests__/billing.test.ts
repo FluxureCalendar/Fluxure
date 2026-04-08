@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import request from 'supertest';
+import { createTestApp } from './helpers.js';
+
+// ── Hoisted mocks ────────────────────────────────────────────
 
 const { mockDb } = vi.hoisted(() => {
   const mockReturning = vi.fn().mockResolvedValue([]);
@@ -16,9 +19,9 @@ const { mockDb } = vi.hoisted(() => {
 
   function makeWhereResult(data: unknown[]) {
     const result = Promise.resolve(data);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Test mock augmentation
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (result as any).limit = mockLimit;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Test mock augmentation
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (result as any).orderBy = vi.fn().mockReturnValue({ limit: mockLimit });
     return result;
   }
@@ -43,7 +46,7 @@ const { mockDb } = vi.hoisted(() => {
     insert: vi.fn().mockReturnValue({ values: mockValues }),
     update: vi.fn().mockReturnValue({ set: mockSet }),
     delete: vi.fn().mockReturnValue({ where: mockDeleteWhere }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Test mock callback
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     transaction: vi.fn().mockImplementation(async (fn: any) => {
       const tx = {
         select: vi.fn().mockReturnValue({ from: mockFrom }),
@@ -73,25 +76,25 @@ const { mockDb } = vi.hoisted(() => {
 
 const { mockStripe } = vi.hoisted(() => {
   const mockStripe = {
-    customers: {
-      create: vi.fn(),
-    },
-    checkout: {
-      sessions: {
-        create: vi.fn(),
-      },
-    },
-    billingPortal: {
-      sessions: {
-        create: vi.fn(),
-      },
-    },
-    subscriptions: {
-      retrieve: vi.fn(),
-    },
+    customers: { create: vi.fn() },
+    checkout: { sessions: { create: vi.fn() } },
+    billingPortal: { sessions: { create: vi.fn() } },
+    subscriptions: { retrieve: vi.fn() },
   };
   return { mockStripe };
 });
+
+const { configState } = vi.hoisted(() => {
+  const configState = {
+    stripeSecretKey: '',
+    stripeMonthlyPriceId: '',
+    stripeAnnualPriceId: '',
+    corsOrigin: 'http://localhost:5173',
+  };
+  return { configState };
+});
+
+// ── Module mocks ─────────────────────────────────────────────
 
 vi.mock('../db/pg-index.js', () => ({ db: mockDb }));
 vi.mock('../ws.js', () => ({
@@ -109,24 +112,18 @@ vi.mock('../logger.js', () => ({
     debug: vi.fn(),
   }),
 }));
-
-let stripeSecretKey = '';
-let stripeMonthlyPriceId = '';
-let stripeAnnualPriceId = '';
-let corsOrigin = 'http://localhost:5173';
-
 vi.mock('../config.js', () => ({
-  getStripeSecretKey: () => stripeSecretKey,
-  getStripeProMonthlyPriceId: () => stripeMonthlyPriceId,
-  getStripeProAnnualPriceId: () => stripeAnnualPriceId,
+  getStripeSecretKey: () => configState.stripeSecretKey,
+  getStripeProMonthlyPriceId: () => configState.stripeMonthlyPriceId,
+  getStripeProAnnualPriceId: () => configState.stripeAnnualPriceId,
   get CORS_ORIGIN() {
-    return corsOrigin;
+    return configState.corsOrigin;
   },
   get FRONTEND_URL() {
-    return corsOrigin;
+    return configState.corsOrigin;
   },
+  isSelfHosted: () => false,
 }));
-
 vi.mock('stripe', () => {
   function StripeMock() {
     return mockStripe;
@@ -138,7 +135,7 @@ beforeAll(() => {
   process.env.NODE_ENV = 'test';
 });
 
-import { createTestApp } from './helpers.js';
+// ── Helpers ──────────────────────────────────────────────────
 
 function resetMocks() {
   vi.clearAllMocks();
@@ -153,17 +150,32 @@ function resetMocks() {
   mockDb.update.mockReturnValue({ set: mockDb._mockSet });
   mockDb._mockDeleteWhere.mockResolvedValue(undefined);
   mockDb.delete.mockReturnValue({ where: mockDb._mockDeleteWhere });
-
-  stripeSecretKey = '';
-  stripeMonthlyPriceId = '';
-  stripeAnnualPriceId = '';
-  corsOrigin = 'http://localhost:5173';
 }
+
+/** Factory: builds a user DB row for billing status queries. */
+function makeUserRow(overrides: Record<string, unknown> = {}) {
+  return {
+    plan: 'free',
+    stripeCustomerId: null,
+    stripeSubscriptionId: null,
+    planPeriodEnd: null,
+    billingInterval: null,
+    paymentStatus: null,
+    ...overrides,
+  };
+}
+
+// ── Stripe NOT configured ────────────────────────────────────
+// The billing router caches Stripe internally via getStripe().
+// These tests import with no key so getStripe() returns null.
 
 describe('Billing routes (Stripe not configured)', () => {
   let app: ReturnType<typeof createTestApp>;
 
   beforeAll(async () => {
+    configState.stripeSecretKey = '';
+    configState.stripeMonthlyPriceId = '';
+    configState.stripeAnnualPriceId = '';
     const { default: billingRouter } = await import('../routes/billing.js');
     app = createTestApp('billing', billingRouter);
   });
@@ -172,18 +184,7 @@ describe('Billing routes (Stripe not configured)', () => {
 
   describe('GET /api/billing/status', () => {
     it('returns free plan status for a free user', async () => {
-      mockDb._setWhereResults([
-        [
-          {
-            plan: 'free',
-            stripeCustomerId: null,
-            stripeSubscriptionId: null,
-            planPeriodEnd: null,
-            billingInterval: null,
-            paymentStatus: null,
-          },
-        ],
-      ]);
+      mockDb._setWhereResults([[makeUserRow()]]);
 
       const res = await request(app).get('/api/billing/status');
 
@@ -198,18 +199,17 @@ describe('Billing routes (Stripe not configured)', () => {
       expect(res.body.cancelAt).toBeNull();
     });
 
-    it('returns pro plan status for a pro user', async () => {
+    it('returns pro plan status (no Stripe cancel check)', async () => {
       const periodEnd = '2026-04-15T00:00:00.000Z';
       mockDb._setWhereResults([
         [
-          {
+          makeUserRow({
             plan: 'pro',
             stripeCustomerId: 'cus_123',
             stripeSubscriptionId: 'sub_123',
             planPeriodEnd: periodEnd,
             billingInterval: 'monthly',
-            paymentStatus: null,
-          },
+          }),
         ],
       ]);
 
@@ -220,10 +220,10 @@ describe('Billing routes (Stripe not configured)', () => {
       expect(res.body.hasSubscription).toBe(true);
       expect(res.body.billingInterval).toBe('monthly');
       expect(res.body.periodEnd).toBe(periodEnd);
-      expect(res.body.limits).toBeDefined();
       expect(res.body.limits.maxHabits).toBe(-1);
       expect(res.body.cancelAtPeriodEnd).toBe(false);
       expect(res.body.cancelAt).toBeNull();
+      expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalled();
     });
 
     it('returns 404 when user not found', async () => {
@@ -233,6 +233,49 @@ describe('Billing routes (Stripe not configured)', () => {
 
       expect(res.status).toBe(404);
       expect(res.body.error).toBe('Not found');
+    });
+
+    it('returns trial status for pro user without subscription', async () => {
+      const futureDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      mockDb._setWhereResults([
+        [
+          makeUserRow({
+            plan: 'pro',
+            stripeCustomerId: null,
+            stripeSubscriptionId: null,
+            planPeriodEnd: futureDate,
+          }),
+        ],
+      ]);
+
+      const res = await request(app).get('/api/billing/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.plan).toBe('pro');
+      expect(res.body.isTrial).toBe(true);
+      expect(res.body.trialDaysRemaining).toBeGreaterThan(0);
+      expect(res.body.hasSubscription).toBe(false);
+    });
+
+    it('returns expired trial as free plan', async () => {
+      const pastDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      mockDb._setWhereResults([
+        [
+          makeUserRow({
+            plan: 'pro',
+            stripeCustomerId: null,
+            stripeSubscriptionId: null,
+            planPeriodEnd: pastDate,
+          }),
+        ],
+      ]);
+
+      const res = await request(app).get('/api/billing/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.plan).toBe('free');
+      expect(res.body.isTrial).toBe(false);
+      expect(res.body.limits.maxHabits).toBe(3);
     });
   });
 
@@ -255,45 +298,18 @@ describe('Billing routes (Stripe not configured)', () => {
   });
 });
 
+// ── Stripe configured ────────────────────────────────────────
+// Fresh module import with Stripe keys set, so getStripe() caches a live instance.
+
 describe('Billing routes (Stripe configured)', () => {
   let app: ReturnType<typeof createTestApp>;
 
   beforeAll(async () => {
-    stripeSecretKey = 'sk_test_123';
-    stripeMonthlyPriceId = 'price_monthly_123';
-    stripeAnnualPriceId = 'price_annual_123';
+    configState.stripeSecretKey = 'sk_test_123';
+    configState.stripeMonthlyPriceId = 'price_monthly_123';
+    configState.stripeAnnualPriceId = 'price_annual_123';
 
     vi.resetModules();
-
-    vi.doMock('../db/pg-index.js', () => ({ db: mockDb }));
-    vi.doMock('../ws.js', () => ({
-      broadcastToUser: vi.fn(),
-      broadcast: vi.fn(),
-    }));
-    vi.doMock('../polling-ref.js', () => ({
-      triggerReschedule: vi.fn(),
-    }));
-    vi.doMock('../logger.js', () => ({
-      createLogger: () => ({
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      }),
-    }));
-    vi.doMock('../config.js', () => ({
-      getStripeSecretKey: () => 'sk_test_123',
-      getStripeProMonthlyPriceId: () => 'price_monthly_123',
-      getStripeProAnnualPriceId: () => 'price_annual_123',
-      CORS_ORIGIN: 'http://localhost:5173',
-      FRONTEND_URL: 'http://localhost:5173',
-    }));
-    vi.doMock('stripe', () => {
-      function StripeMock() {
-        return mockStripe;
-      }
-      return { default: StripeMock };
-    });
 
     const { default: billingRouter } = await import('../routes/billing.js');
     app = createTestApp('billing', billingRouter);
@@ -302,9 +318,8 @@ describe('Billing routes (Stripe configured)', () => {
   beforeEach(resetMocks);
 
   describe('POST /api/billing/checkout', () => {
-    it('creates checkout session and returns URL for existing customer', async () => {
+    it('creates checkout session for existing Stripe customer', async () => {
       mockDb._setWhereResults([[{ stripeCustomerId: 'cus_existing', email: 'test@example.com' }]]);
-
       mockStripe.checkout.sessions.create.mockResolvedValue({
         url: 'https://checkout.stripe.com/session_123',
       });
@@ -324,7 +339,6 @@ describe('Billing routes (Stripe configured)', () => {
 
     it('creates new Stripe customer if none exists', async () => {
       mockDb._setWhereResults([[{ stripeCustomerId: null, email: 'test@example.com' }]]);
-
       mockStripe.customers.create.mockResolvedValue({ id: 'cus_new' });
       mockStripe.checkout.sessions.create.mockResolvedValue({
         url: 'https://checkout.stripe.com/session_456',
@@ -335,8 +349,62 @@ describe('Billing routes (Stripe configured)', () => {
       expect(res.status).toBe(200);
       expect(res.body.url).toBe('https://checkout.stripe.com/session_456');
       expect(mockStripe.customers.create).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'test@example.com' }),
+      );
+    });
+
+    it('returns 404 when user not found during checkout', async () => {
+      mockDb._setWhereResults([[]]);
+
+      const res = await request(app).post('/api/billing/checkout').send({ interval: 'monthly' });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Not found');
+    });
+
+    it('returns 400 for invalid checkout interval', async () => {
+      const res = await request(app).post('/api/billing/checkout').send({ interval: 'weekly' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Invalid checkout parameters');
+    });
+
+    it('returns 500 when checkout session URL is null', async () => {
+      mockDb._setWhereResults([[{ stripeCustomerId: 'cus_existing', email: 'test@example.com' }]]);
+      mockStripe.checkout.sessions.create.mockResolvedValue({ url: null });
+
+      const res = await request(app).post('/api/billing/checkout').send({ interval: 'monthly' });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Checkout session URL unavailable');
+    });
+
+    it('uses annual price ID for annual interval', async () => {
+      mockDb._setWhereResults([[{ stripeCustomerId: 'cus_existing', email: 'test@example.com' }]]);
+      mockStripe.checkout.sessions.create.mockResolvedValue({
+        url: 'https://checkout.stripe.com/session_annual',
+      });
+
+      await request(app).post('/api/billing/checkout').send({ interval: 'annual' });
+
+      expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          email: 'test@example.com',
+          line_items: [{ price: 'price_annual_123', quantity: 1 }],
+        }),
+      );
+    });
+
+    it('defaults to monthly price when interval is omitted', async () => {
+      mockDb._setWhereResults([[{ stripeCustomerId: 'cus_existing', email: 'test@example.com' }]]);
+      mockStripe.checkout.sessions.create.mockResolvedValue({
+        url: 'https://checkout.stripe.com/session_default',
+      });
+
+      await request(app).post('/api/billing/checkout').send({});
+
+      expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          line_items: [{ price: 'price_monthly_123', quantity: 1 }],
         }),
       );
     });
@@ -352,7 +420,7 @@ describe('Billing routes (Stripe configured)', () => {
       expect(res.body.error).toBe('No billing account found');
     });
 
-    it('returns 400 when user has no stripeSubscriptionId', async () => {
+    it('returns 400 when user has no active subscription', async () => {
       mockDb._setWhereResults([[{ stripeCustomerId: 'cus_existing', stripeSubscriptionId: null }]]);
 
       const res = await request(app).post('/api/billing/portal').send({});
@@ -361,11 +429,10 @@ describe('Billing routes (Stripe configured)', () => {
       expect(res.body.error).toBe('No active subscription. Please subscribe first.');
     });
 
-    it('returns portal URL for user with stripeCustomerId and subscription', async () => {
+    it('returns portal URL for user with active subscription', async () => {
       mockDb._setWhereResults([
         [{ stripeCustomerId: 'cus_existing', stripeSubscriptionId: 'sub_123' }],
       ]);
-
       mockStripe.billingPortal.sessions.create.mockResolvedValue({
         url: 'https://billing.stripe.com/portal_123',
       });
@@ -375,9 +442,7 @@ describe('Billing routes (Stripe configured)', () => {
       expect(res.status).toBe(200);
       expect(res.body.url).toBe('https://billing.stripe.com/portal_123');
       expect(mockStripe.billingPortal.sessions.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          customer: 'cus_existing',
-        }),
+        expect.objectContaining({ customer: 'cus_existing' }),
       );
     });
   });
@@ -388,14 +453,14 @@ describe('Billing routes (Stripe configured)', () => {
       const cancelAt = Math.floor(new Date('2026-04-15T00:00:00.000Z').getTime() / 1000);
       mockDb._setWhereResults([
         [
-          {
+          makeUserRow({
             plan: 'pro',
             stripeCustomerId: 'cus_123',
             stripeSubscriptionId: 'sub_cancel',
             planPeriodEnd: periodEnd,
             billingInterval: 'monthly',
             paymentStatus: 'active',
-          },
+          }),
         ],
       ]);
 
@@ -416,14 +481,14 @@ describe('Billing routes (Stripe configured)', () => {
       const periodEnd = '2026-04-15T00:00:00.000Z';
       mockDb._setWhereResults([
         [
-          {
+          makeUserRow({
             plan: 'pro',
             stripeCustomerId: 'cus_123',
             stripeSubscriptionId: 'sub_active',
             planPeriodEnd: periodEnd,
             billingInterval: 'monthly',
             paymentStatus: 'active',
-          },
+          }),
         ],
       ]);
 
@@ -443,14 +508,14 @@ describe('Billing routes (Stripe configured)', () => {
       const periodEnd = '2026-04-15T00:00:00.000Z';
       mockDb._setWhereResults([
         [
-          {
+          makeUserRow({
             plan: 'pro',
             stripeCustomerId: 'cus_123',
             stripeSubscriptionId: 'sub_fail',
             planPeriodEnd: periodEnd,
             billingInterval: 'monthly',
             paymentStatus: 'active',
-          },
+          }),
         ],
       ]);
 

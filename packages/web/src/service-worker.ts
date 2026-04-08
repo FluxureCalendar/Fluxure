@@ -10,12 +10,27 @@ const sw = self as unknown as ServiceWorkerGlobalScope;
 const CACHE_NAME = `fluxure-cache-${version}`;
 const HTML_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// When true, the fetch handler skips caching navigation responses
+let loggedOut = false;
+
+sw.addEventListener('message', (event) => {
+  if (event.data?.type === 'LOGOUT') {
+    loggedOut = true;
+    caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))));
+  }
+});
+
 // App shell: JS/CSS bundles + static assets
 const APP_SHELL = [...build, ...files];
 
 sw.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
-  sw.skipWaiting();
+  loggedOut = false;
+  event.waitUntil(
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => cache.addAll(APP_SHELL))
+      .then(() => sw.skipWaiting()),
+  );
 });
 
 sw.addEventListener('activate', (event) => {
@@ -74,7 +89,11 @@ sw.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          if (response.ok && !response.headers.get('cache-control')?.includes('no-store')) {
+          if (
+            !loggedOut &&
+            response.ok &&
+            !response.headers.get('cache-control')?.includes('no-store')
+          ) {
             const clone = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
           }

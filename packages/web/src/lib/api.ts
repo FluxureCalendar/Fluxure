@@ -1,11 +1,8 @@
 import { PUBLIC_API_URL } from '$env/static/public';
 import { goto } from '$app/navigation';
-import {
-  DEFAULT_API_BASE,
-  API_ERROR_MESSAGE_MAX_LENGTH,
-  BLOB_URL_REVOKE_DELAY_MS,
-} from '@fluxure/shared';
+import { DEFAULT_API_BASE, API_ERROR_MESSAGE_MAX_LENGTH } from '@fluxure/shared';
 import { showToast } from './toast.svelte';
+import { invalidateSearchCache } from './search-cache';
 import type {
   Habit,
   CreateHabitRequest,
@@ -14,7 +11,6 @@ import type {
   SmartMeeting,
   CreateMeetingRequest,
   FocusTimeRule,
-  BufferConfig,
   CalendarEvent,
   SchedulingLink,
   CreateLinkRequest,
@@ -27,13 +23,13 @@ import type {
   ParsedItem,
   QualityScore,
   ScheduleChange,
+  SearchIndex,
 } from '@fluxure/shared';
 import { CalendarMode } from '@fluxure/shared';
 
 const API_BASE = PUBLIC_API_URL || DEFAULT_API_BASE;
 
 let refreshPromise: Promise<boolean> | null = null;
-const retriedPaths = new Set<string>();
 
 // Prevents duplicate in-flight GET requests to the same endpoint
 const inFlight = new Map<string, Promise<unknown>>();
@@ -59,6 +55,7 @@ export interface BillingStatus {
   paymentStatus: string | null;
   cancelAtPeriodEnd: boolean;
   cancelAt: string | null;
+  selfHosted: boolean;
 }
 
 export class ApiError extends Error {
@@ -85,18 +82,49 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return doRequest<T>(path, options);
 }
 
-async function doRequest<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-    credentials: 'include',
-  });
+const LONG_TIMEOUT_MS = 120_000; // 2 minutes for long-running ops
+
+async function requestLong<T>(path: string, options?: RequestInit): Promise<T> {
+  return doRequest<T>(path, options, LONG_TIMEOUT_MS);
+}
+
+async function doRequest<T>(
+  path: string,
+  options?: RequestInit,
+  timeoutMs = 10_000,
+  isRetry = false,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      signal: options?.signal ?? controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+      credentials: 'include',
+    });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ApiError('Request timed out', 0);
+    }
+    throw err;
+  }
+  clearTimeout(timeoutId);
   if (!res.ok) {
     // Try token refresh on 401, then redirect to login if refresh fails
-    if (res.status === 401 && !path.startsWith('/auth/') && !retriedPaths.has(path)) {
+    if (res.status === 401 && !path.startsWith('/auth/')) {
+      // Already a retry after refresh — don't loop, just redirect.
+      if (isRetry) {
+        if (typeof window !== 'undefined') goto('/login');
+        throw Object.assign(new ApiError('Session expired', 401), { handled: true });
+      }
+      // Ensure only one refresh is in-flight at a time; all concurrent 401s
+      // share the same promise so they all retry after the single refresh.
       if (!refreshPromise) {
         refreshPromise = (async () => {
           try {
@@ -106,20 +134,17 @@ async function doRequest<T>(path: string, options?: RequestInit): Promise<T> {
             });
             return refreshRes.ok;
           } catch {
-            return false;
-          } finally {
+            // Only clear on failure so a new refresh can be attempted next time.
+            // On success, the resolved promise stays cached — concurrent 401s
+            // will await the already-resolved value and retry immediately.
             refreshPromise = null;
+            return false;
           }
         })();
       }
       const refreshed = await refreshPromise;
       if (refreshed) {
-        retriedPaths.add(path);
-        try {
-          return await doRequest<T>(path, options);
-        } finally {
-          retriedPaths.delete(path);
-        }
+        return await doRequest<T>(path, options, timeoutMs, true);
       }
       // Direct goto avoids circular dependency with auth.svelte.ts
       if (typeof window !== 'undefined') {
@@ -127,48 +152,41 @@ async function doRequest<T>(path: string, options?: RequestInit): Promise<T> {
       }
       throw Object.assign(new ApiError('Session expired', 401), { handled: true });
     }
-    if (res.status === 403) {
-      try {
-        const body = await res.json();
-        if (body.code === 'EMAIL_NOT_VERIFIED' && typeof window !== 'undefined') {
-          goto('/verify-email');
-          throw new Error('Email not verified - redirecting');
-        }
-        if (body.code === 'GDPR_CONSENT_REQUIRED' && typeof window !== 'undefined') {
-          goto('/onboarding');
-          throw new Error('GDPR consent required - redirecting');
-        }
-        if (body.error === 'plan_limit_reached') {
-          const msg = body.upgrade_message || 'Upgrade to Pro to unlock this feature';
-          showToast(msg, 'info');
-          throw Object.assign(new ApiError(msg, 403, 'plan_limit_reached'), { handled: true });
-        }
-        if (body.error === 'feature_not_available') {
-          const msg = body.upgrade_message || 'This feature requires a Pro plan';
-          showToast(msg, 'info');
-          throw Object.assign(new ApiError(msg, 403, 'feature_not_available'), { handled: true });
-        }
-      } catch (e) {
-        if (
-          e instanceof Error &&
-          (e.message === 'Email not verified - redirecting' ||
-            e.message === 'GDPR consent required - redirecting')
-        )
-          throw e;
-        if (e instanceof ApiError) throw e;
-        /* no JSON body */
+    // Parse the response body once, then inspect it for special 403 codes
+    // and generic error messages. Avoids double-consuming the body stream.
+    let body: Record<string, unknown> | null = null;
+    try {
+      body = await res.json();
+    } catch {
+      /* no JSON body */
+    }
+    if (res.status === 403 && body) {
+      if (body.code === 'EMAIL_NOT_VERIFIED' && typeof window !== 'undefined') {
+        goto('/verify-email');
+        throw new Error('Email not verified - redirecting');
+      }
+      if (body.code === 'GDPR_CONSENT_REQUIRED' && typeof window !== 'undefined') {
+        goto('/onboarding');
+        throw new Error('GDPR consent required - redirecting');
+      }
+      if (body.error === 'plan_limit_reached') {
+        const msg = (body.upgrade_message as string) || 'Upgrade to Pro to unlock this feature';
+        showToast(msg, 'info');
+        throw Object.assign(new ApiError(msg, 403, 'plan_limit_reached'), { handled: true });
+      }
+      if (body.error === 'feature_not_available') {
+        const msg = (body.upgrade_message as string) || 'This feature requires a Pro plan';
+        showToast(msg, 'info');
+        throw Object.assign(new ApiError(msg, 403, 'feature_not_available'), { handled: true });
       }
     }
     let message = `API error: ${res.status}`;
-    try {
-      const body = await res.json();
-      const raw = body.error ?? body.message ?? message;
+    if (body) {
+      const raw = (body.error ?? body.message ?? message) as string;
       message =
         raw.length > API_ERROR_MESSAGE_MAX_LENGTH
           ? raw.slice(0, API_ERROR_MESSAGE_MAX_LENGTH) + '...'
           : raw;
-    } catch {
-      /* no JSON body */
     }
     throw new ApiError(message, res.status);
   }
@@ -176,19 +194,32 @@ async function doRequest<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+/** Wraps a request promise to invalidate the search cache on success */
+function withCacheInvalidation<T>(promise: Promise<T>): Promise<T> {
+  return promise.then((result) => {
+    invalidateSearchCache();
+    return result;
+  });
+}
+
 export const habits = {
   list: () => request<Habit[]>('/habits'),
   create: (data: CreateHabitRequest) =>
-    request<Habit>('/habits', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
+    withCacheInvalidation(
+      request<Habit>('/habits', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    ),
   update: (id: string, data: Partial<CreateHabitRequest & { forced: boolean; enabled: boolean }>) =>
-    request<Habit>(`/habits/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
-  delete: (id: string) => request<void>(`/habits/${id}`, { method: 'DELETE' }),
+    withCacheInvalidation(
+      request<Habit>(`/habits/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    ),
+  delete: (id: string) =>
+    withCacheInvalidation(request<void>(`/habits/${id}`, { method: 'DELETE' })),
   force: (id: string, forced: boolean) =>
     request<Habit>(`/habits/${id}/force`, {
       method: 'POST',
@@ -211,22 +242,28 @@ export const habits = {
 export const tasks = {
   list: () => request<Task[]>('/tasks'),
   create: (data: CreateTaskRequest) =>
-    request<Task>('/tasks', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
+    withCacheInvalidation(
+      request<Task>('/tasks', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    ),
   update: (
     id: string,
     data: Partial<
       CreateTaskRequest & { remainingDuration: number; status: string; isUpNext: boolean }
     >,
   ) =>
-    request<Task>(`/tasks/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
-  delete: (id: string) => request<void>(`/tasks/${id}`, { method: 'DELETE' }),
-  complete: (id: string) => request<Task>(`/tasks/${id}/complete`, { method: 'POST' }),
+    withCacheInvalidation(
+      request<Task>(`/tasks/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    ),
+  delete: (id: string) =>
+    withCacheInvalidation(request<void>(`/tasks/${id}`, { method: 'DELETE' })),
+  complete: (id: string) =>
+    withCacheInvalidation(request<Task>(`/tasks/${id}/complete`, { method: 'POST' })),
   setUpNext: (id: string, isUpNext: boolean) =>
     request<Task>(`/tasks/${id}/up-next`, {
       method: 'POST',
@@ -256,34 +293,32 @@ export const tasks = {
 export const meetings = {
   list: () => request<SmartMeeting[]>('/meetings'),
   create: (data: CreateMeetingRequest) =>
-    request<SmartMeeting>('/meetings', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
+    withCacheInvalidation(
+      request<SmartMeeting>('/meetings', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    ),
   update: (id: string, data: Partial<CreateMeetingRequest>) =>
-    request<SmartMeeting>(`/meetings/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
-  delete: (id: string) => request<void>(`/meetings/${id}`, { method: 'DELETE' }),
+    withCacheInvalidation(
+      request<SmartMeeting>(`/meetings/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    ),
+  delete: (id: string) =>
+    withCacheInvalidation(request<void>(`/meetings/${id}`, { method: 'DELETE' })),
 };
 
 export const focusTime = {
   get: () => request<FocusTimeRule>('/focus-time'),
   update: (data: Partial<FocusTimeRule>) =>
-    request<FocusTimeRule>('/focus-time', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
-};
-
-export const buffers = {
-  get: () => request<BufferConfig>('/buffers'),
-  update: (data: Partial<BufferConfig>) =>
-    request<BufferConfig>('/buffers', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
+    withCacheInvalidation(
+      request<FocusTimeRule>('/focus-time', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    ),
 };
 
 export const schedule = {
@@ -295,32 +330,14 @@ export const schedule = {
     return request<CalendarEvent[]>(`/schedule${qs ? '?' + qs : ''}`);
   },
   run: () => request<RescheduleResult>('/schedule/reschedule', { method: 'POST' }),
-  export: async (start?: string, end?: string) => {
-    const params = new URLSearchParams();
-    if (start) params.set('start', start);
-    if (end) params.set('end', end);
-    const qs = params.toString();
-    const res = await fetch(`${API_BASE}/schedule/export${qs ? '?' + qs : ''}`, {
-      credentials: 'include',
-    });
-    if (!res.ok) {
-      throw new ApiError(`Export failed: ${res.status}`, res.status);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'fluxure-schedule.ics';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), BLOB_URL_REVOKE_DELAY_MS);
-  },
   getAlternatives: (itemId: string) =>
     request<AlternativesResult>(`/schedule/${itemId}/alternatives`),
   deleteAllManaged: () =>
-    request<{ message: string; googleEventsDeleted: number; localEventsDeleted: number }>(
+    requestLong<{ message: string; googleEventsDeleted: number; localEventsDeleted: number }>(
       '/schedule/managed-events',
       { method: 'DELETE', body: JSON.stringify({ confirm: true }) },
     ),
+  forceSync: () => requestLong<{ message: string }>('/schedule/force-sync', { method: 'POST' }),
   moveEvent: (eventId: string, start: string, end: string) =>
     request<{ message: string; eventId: string; start: string; end: string }>(
       `/schedule/${eventId}/move`,
@@ -333,6 +350,10 @@ export const schedule = {
     }),
   complete: (eventId: string) =>
     request<{ message: string; eventId: string }>(`/schedule/${eventId}/complete`, {
+      method: 'POST',
+    }),
+  uncomplete: (eventId: string) =>
+    request<{ message: string; eventId: string }>(`/schedule/${eventId}/uncomplete`, {
       method: 'POST',
     }),
   moveExternalEvent: (eventId: string, start: string, end: string) =>
@@ -403,10 +424,7 @@ export const calendars = {
 };
 
 export const search = {
-  query: (q: string) =>
-    request<{ results: Array<{ type: string; id: string; name: string; href: string }> }>(
-      `/search?q=${encodeURIComponent(q)}`,
-    ),
+  index: () => request<SearchIndex>('/search/index'),
 };
 
 export const settings = {
@@ -461,12 +479,16 @@ export interface SchedulingTemplate {
 export const schedulingTemplates = {
   list: () => request<{ templates: SchedulingTemplate[] }>('/scheduling-templates'),
   create: (data: { name: string; startTime: string; endTime: string }) =>
-    request<{ template: SchedulingTemplate }>('/scheduling-templates', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
+    withCacheInvalidation(
+      request<{ template: SchedulingTemplate }>('/scheduling-templates', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    ),
   delete: (id: string) =>
-    request<{ success: boolean }>(`/scheduling-templates/${id}`, { method: 'DELETE' }),
+    withCacheInvalidation(
+      request<{ success: boolean }>(`/scheduling-templates/${id}`, { method: 'DELETE' }),
+    ),
 };
 
 export const billing = {

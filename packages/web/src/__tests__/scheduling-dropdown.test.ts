@@ -28,46 +28,52 @@ const mockTemplates: SchedulingTemplate[] = [
 ];
 
 describe('handleScheduleDropdownChange', () => {
-  it('handles built-in scheduling hours value', () => {
+  it('handles built-in working hours value', () => {
     const setFields = vi.fn();
     handleScheduleDropdownChange('working', mockTemplates, setFields);
-
     expect(setFields).toHaveBeenCalledWith('working', null);
   });
 
-  it('handles personal scheduling hours value', () => {
+  it('handles built-in personal hours value', () => {
     const setFields = vi.fn();
     handleScheduleDropdownChange('personal', mockTemplates, setFields);
-
     expect(setFields).toHaveBeenCalledWith('personal', null);
+  });
+
+  it('handles built-in custom hours value', () => {
+    const setFields = vi.fn();
+    handleScheduleDropdownChange('custom', mockTemplates, setFields);
+    expect(setFields).toHaveBeenCalledWith('custom', null);
   });
 
   it('handles template selection with valid template ID', () => {
     const setFields = vi.fn();
     handleScheduleDropdownChange('template:tmpl-1', mockTemplates, setFields);
-
     expect(setFields).toHaveBeenCalledWith(SchedulingHours.Custom, 'tmpl-1');
   });
 
   it('handles template selection with second template', () => {
     const setFields = vi.fn();
     handleScheduleDropdownChange('template:tmpl-2', mockTemplates, setFields);
-
     expect(setFields).toHaveBeenCalledWith(SchedulingHours.Custom, 'tmpl-2');
   });
 
   it('does not call setFields for non-existent template', () => {
     const setFields = vi.fn();
     handleScheduleDropdownChange('template:non-existent', mockTemplates, setFields);
-
     expect(setFields).not.toHaveBeenCalled();
   });
 
-  it('handles custom scheduling hours value', () => {
+  it('does not call setFields for empty template list', () => {
     const setFields = vi.fn();
-    handleScheduleDropdownChange('custom', mockTemplates, setFields);
+    handleScheduleDropdownChange('template:tmpl-1', [], setFields);
+    expect(setFields).not.toHaveBeenCalled();
+  });
 
-    expect(setFields).toHaveBeenCalledWith('custom', null);
+  it('handles template: prefix with empty id', () => {
+    const setFields = vi.fn();
+    handleScheduleDropdownChange('template:', mockTemplates, setFields);
+    expect(setFields).not.toHaveBeenCalled();
   });
 });
 
@@ -80,15 +86,20 @@ describe('getScheduleDropdownValue', () => {
     expect(getScheduleDropdownValue('working', null)).toBe('working');
   });
 
-  it('returns scheduling hours for personal with no template', () => {
+  it('returns personal when no template', () => {
     expect(getScheduleDropdownValue('personal', null)).toBe('personal');
   });
 
-  it('returns scheduling hours for custom with no template', () => {
+  it('returns custom when no template', () => {
     expect(getScheduleDropdownValue('custom', null)).toBe('custom');
   });
 
   it('prefers template over scheduling hours value', () => {
     expect(getScheduleDropdownValue('working', 'tmpl-2')).toBe('template:tmpl-2');
+  });
+
+  it('handles empty string template id as truthy (returns template prefix)', () => {
+    // empty string is falsy, so returns scheduling hours
+    expect(getScheduleDropdownValue('working', '')).toBe('working');
   });
 });

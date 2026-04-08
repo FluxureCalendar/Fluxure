@@ -1,5 +1,4 @@
 @use 'variables' as *;
-@forward 'variables';
 
 // Layout
 @mixin flex-center {
@@ -8,10 +7,10 @@
   justify-content: center;
 }
 
-@mixin flex-col($gap: null) {
+@mixin flex-col($gap: 0) {
   display: flex;
   flex-direction: column;
-  @if $gap {
+  @if $gap != 0 {
     gap: $gap;
   }
 }
@@ -29,22 +28,22 @@
   white-space: nowrap;
 }
 
-@mixin mono-label {
-  font-family: $font-mono;
-  font-size: 0.6875rem;
+@mixin label {
+  font-family: $font-body;
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  letter-spacing: 0.03em;
 }
 
 // Interactive
 @mixin hover-surface {
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
+  transition: background-color var(--transition-fast);
   &:hover {
-    background: var(--color-surface-hover);
-    color: var(--color-text);
+    background-color: var(--color-surface-hover);
+  }
+  &:active {
+    background-color: var(--color-surface-active);
   }
 }
 
@@ -52,11 +51,16 @@
   @include flex-center;
   width: $size;
   height: $size;
+  min-width: $size;
   border: none;
   border-radius: var(--radius-md);
-  background: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
   cursor: pointer;
   @include hover-surface;
+  &:hover {
+    color: var(--color-text);
+  }
 }
 
 @mixin touch-target {
@@ -64,49 +68,30 @@
   min-height: 44px;
 }
 
-// Badges
-@mixin badge($bg: null, $color: null) {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  border-radius: var(--radius-full);
-  @if $bg {
-    background: $bg;
-  }
-  @if $color {
-    color: $color;
-  }
-}
-
-// Surfaces
+// Components
 @mixin card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
 }
 
-@mixin backdrop($opacity: null) {
+@mixin backdrop($opacity: 0.4) {
   position: fixed;
   inset: 0;
-  @if $opacity {
-    background: rgba(0, 0, 0, $opacity);
-  } @else {
-    background: var(--color-overlay);
-  }
-  border: none;
-  cursor: default;
+  background: var(--color-overlay);
+  z-index: $z-overlay;
 }
 
-@mixin dropdown-menu {
+@mixin dropdown {
   position: absolute;
-  z-index: $z-dropdown;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  padding: var(--space-1);
+  box-shadow: var(--shadow-sm);
+  z-index: $z-dropdown;
+  padding: var(--space-1) 0;
+  min-width: 160px;
 }
 
 @mixin menu-item {
@@ -116,26 +101,24 @@
   width: 100%;
   padding: var(--space-2) var(--space-3);
   border: none;
-  border-radius: var(--radius-md);
-  background: none;
-  color: var(--color-text-secondary);
+  background: transparent;
+  color: var(--color-text);
+  font-family: $font-body;
   font-size: 0.8125rem;
-  font-weight: 500;
+  line-height: 1.5;
   cursor: pointer;
-  white-space: nowrap;
   text-align: left;
   @include hover-surface;
 }
 
 @mixin menu-item-danger {
+  @include menu-item;
+  color: var(--color-danger);
   &:hover {
-    background: var(--color-danger-muted);
-    color: var(--color-danger);
+    background-color: var(--color-danger-muted);
   }
 }
 
-// Slide-over panel
-// Requires @keyframes slideIn to be defined (see _components.scss)
 @mixin slideover($width: 420px) {
   position: fixed;
   top: 0;
@@ -147,16 +130,13 @@
   border-left: 1px solid var(--color-border);
   z-index: $z-panel;
   @include flex-col;
-  animation: slideIn var(--transition-slow) ease;
+  animation: slideIn 250ms ease-out;
+}
 
-  @include mobile {
-    .panel-header {
-      padding: var(--space-3) var(--space-4);
-    }
-    .panel-body {
-      padding: var(--space-4);
-    }
-  }
+@mixin badge {
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
 }
 
 // Responsive
@@ -178,10 +158,53 @@
   }
 }
 
-// Ring progress
-@mixin ring-progress {
-  transition: stroke-dashoffset var(--transition-slow);
-  @media (prefers-reduced-motion: reduce) {
-    transition: none;
+// Staggered entry animation for list items
+@mixin stagger-in($delay: 30ms, $max: 20) {
+  animation: fadeSlideIn 200ms ease-out both;
+  @for $i from 1 through $max {
+    &:nth-child(#{$i}) {
+      animation-delay: #{($i - 1) * $delay};
+    }
   }
+}
+
+// Shared button base styles
+@mixin btn-base {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  font-family: $font-body;
+  font-weight: 400;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  cursor: pointer;
+  @include press-feedback;
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
+// Subtle press feedback for interactive elements
+@mixin press-feedback {
+  transition:
+    transform 80ms ease,
+    box-shadow 80ms ease;
+  &:active:not(:disabled) {
+    transform: scale(0.985);
+  }
+}
+
+// Uppercase section label
+@mixin section-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
 }

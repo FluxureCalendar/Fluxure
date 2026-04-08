@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import request from 'supertest';
 import express from 'express';
+import type { PlanType } from '@fluxure/shared';
+
+// ── Mock DB ──────────────────────────────────────────────────
 
 const { mockDb } = vi.hoisted(() => {
   const mockReturning = vi.fn().mockResolvedValue([]);
@@ -84,6 +87,8 @@ const { mockDb } = vi.hoisted(() => {
   return { mockDb };
 });
 
+// ── Module Mocks ─────────────────────────────────────────────
+
 vi.mock('../db/pg-index.js', () => ({ db: mockDb }));
 vi.mock('../ws.js', () => ({
   broadcastToUser: vi.fn(),
@@ -135,13 +140,7 @@ vi.mock('../routes/schedule-helpers.js', async (importOriginal) => {
       allTasks: [],
       allMeetings: [],
       allFocusRules: [],
-      buf: {
-        id: 'default',
-        travelTimeMinutes: 15,
-        decompressionMinutes: 10,
-        breakBetweenItemsMinutes: 5,
-        applyDecompressionTo: 'all',
-      },
+      buf: { breakBetweenItemsMinutes: 5 },
       userSettings: { timezone: 'UTC', schedulingWindowDays: 14 },
     }),
     buildScheduleItemsForDay: vi.fn().mockReturnValue([]),
@@ -181,19 +180,19 @@ beforeAll(() => {
   process.env.NODE_ENV = 'test';
 });
 
+// ── Router Imports (after mocks) ─────────────────────────────
+
 import habitsRouter from '../routes/habits.js';
 import analyticsRouter from '../routes/analytics.js';
 import activityRouter from '../routes/activity.js';
 import scheduleRouter from '../routes/schedule.js';
+import focusRouter from '../routes/focus.js';
+
+// ── Test Factories ───────────────────────────────────────────
 
 const TEST_USER_ID = 'test-user-id';
 
-/** Create a test app with a specific plan (free or pro). */
-function createTestAppWithPlan(
-  prefix: string,
-  router: express.Router,
-  plan: 'free' | 'pro',
-): express.Express {
+function createTestApp(prefix: string, router: express.Router, plan: PlanType): express.Express {
   const app = express();
   app.use(express.json());
   app.use('/api', (req, _res, next) => {
@@ -206,14 +205,19 @@ function createTestAppWithPlan(
   return app;
 }
 
-const freeHabitsApp = createTestAppWithPlan('habits', habitsRouter, 'free');
-const proHabitsApp = createTestAppWithPlan('habits', habitsRouter, 'pro');
-const freeAnalyticsApp = createTestAppWithPlan('analytics', analyticsRouter, 'free');
-const proAnalyticsApp = createTestAppWithPlan('analytics', analyticsRouter, 'pro');
-const freeActivityApp = createTestAppWithPlan('activity', activityRouter, 'free');
-const proActivityApp = createTestAppWithPlan('activity', activityRouter, 'pro');
-const freeScheduleApp = createTestAppWithPlan('schedule', scheduleRouter, 'free');
-const proScheduleApp = createTestAppWithPlan('schedule', scheduleRouter, 'pro');
+/** Build apps for both plans from a single router. */
+function createPlanApps(prefix: string, router: express.Router) {
+  return {
+    free: createTestApp(prefix, router, 'free'),
+    pro: createTestApp(prefix, router, 'pro'),
+  };
+}
+
+const habitsApps = createPlanApps('habits', habitsRouter);
+const analyticsApps = createPlanApps('analytics', analyticsRouter);
+const activityApps = createPlanApps('activity', activityRouter);
+const scheduleApps = createPlanApps('schedule', scheduleRouter);
+const focusApps = createPlanApps('focus-time', focusRouter);
 
 const validHabitBody = {
   name: 'Morning Run',
@@ -222,8 +226,10 @@ const validHabitBody = {
   idealTime: '07:00',
   durationMin: 30,
   durationMax: 60,
-  frequency: 'daily',
+  days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
 };
+
+// ── Reset Helper ─────────────────────────────────────────────
 
 function resetMocks() {
   vi.clearAllMocks();
@@ -240,24 +246,24 @@ function resetMocks() {
   mockDb.delete.mockReturnValue({ where: mockDb._mockDeleteWhere });
 }
 
+// ── Count Gates: Habits ──────────────────────────────────────
+
 describe('Count gates — POST /api/habits', () => {
   beforeEach(resetMocks);
 
-  it('returns 201 when free user is under the limit (count < 3)', async () => {
+  it('allows free user when under the limit (count < 3)', async () => {
     const newHabit = { id: 'new-id', ...validHabitBody, priority: 3 };
     mockDb._setWhereResults([[{ count: 2 }]]);
     mockDb._mockReturning.mockResolvedValueOnce([newHabit]);
 
-    const res = await request(freeHabitsApp).post('/api/habits').send(validHabitBody);
-
+    const res = await request(habitsApps.free).post('/api/habits').send(validHabitBody);
     expect(res.status).toBe(201);
   });
 
-  it('returns 403 with plan_limit_reached when free user is at the limit (count = 3)', async () => {
+  it('blocks free user at the limit (count = 3)', async () => {
     mockDb._setWhereResults([[{ count: 3 }]]);
 
-    const res = await request(freeHabitsApp).post('/api/habits').send(validHabitBody);
-
+    const res = await request(habitsApps.free).post('/api/habits').send(validHabitBody);
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('plan_limit_reached');
     expect(res.body.limit).toBe('maxHabits');
@@ -267,23 +273,42 @@ describe('Count gates — POST /api/habits', () => {
     expect(res.body.upgrade_url).toBe('/settings#billing');
   });
 
-  it('returns 201 for pro user regardless of count (unlimited)', async () => {
+  it('blocks free user over the limit (downgrade scenario, count > 3)', async () => {
+    mockDb._setWhereResults([[{ count: 5 }]]);
+
+    const res = await request(habitsApps.free).post('/api/habits').send(validHabitBody);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('plan_limit_reached');
+    expect(res.body.current).toBe(5);
+    expect(res.body.max).toBe(3);
+  });
+
+  it('allows pro user regardless of count (unlimited)', async () => {
     const newHabit = { id: 'new-id', ...validHabitBody, priority: 3 };
     mockDb._setWhereResults([[{ count: 50 }]]);
     mockDb._mockReturning.mockResolvedValueOnce([newHabit]);
 
-    const res = await request(proHabitsApp).post('/api/habits').send(validHabitBody);
+    const res = await request(habitsApps.pro).post('/api/habits').send(validHabitBody);
+    expect(res.status).toBe(201);
+  });
 
+  it('allows free user to create first habit (count = 0)', async () => {
+    const newHabit = { id: 'new-id', ...validHabitBody, priority: 3 };
+    mockDb._setWhereResults([[{ count: 0 }]]);
+    mockDb._mockReturning.mockResolvedValueOnce([newHabit]);
+
+    const res = await request(habitsApps.free).post('/api/habits').send(validHabitBody);
     expect(res.status).toBe(201);
   });
 });
+
+// ── Capability Gates: Analytics ──────────────────────────────
 
 describe('Capability gates — GET /api/analytics', () => {
   beforeEach(resetMocks);
 
   it('returns 403 feature_not_available for free users', async () => {
-    const res = await request(freeAnalyticsApp).get('/api/analytics');
-
+    const res = await request(analyticsApps.free).get('/api/analytics');
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('feature_not_available');
     expect(res.body.feature).toBe('analytics');
@@ -294,18 +319,18 @@ describe('Capability gates — GET /api/analytics', () => {
   it('returns 200 for pro users', async () => {
     mockDb._setWhereResults([[], []]);
 
-    const res = await request(proAnalyticsApp).get('/api/analytics');
-
+    const res = await request(analyticsApps.pro).get('/api/analytics');
     expect(res.status).toBe(200);
   });
 });
+
+// ── Capability Gates: Activity Log ───────────────────────────
 
 describe('Capability gates — GET /api/activity', () => {
   beforeEach(resetMocks);
 
   it('returns 403 feature_not_available for free users', async () => {
-    const res = await request(freeActivityApp).get('/api/activity');
-
+    const res = await request(activityApps.free).get('/api/activity');
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('feature_not_available');
     expect(res.body.feature).toBe('activity log');
@@ -315,12 +340,33 @@ describe('Capability gates — GET /api/activity', () => {
   it('returns 200 for pro users', async () => {
     mockDb._setWhereResults([[]]);
 
-    const res = await request(proActivityApp).get('/api/activity');
-
+    const res = await request(activityApps.pro).get('/api/activity');
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
   });
 });
+
+// ── Capability Gates: Focus Time ─────────────────────────────
+
+describe('Capability gates — GET /api/focus-time', () => {
+  beforeEach(resetMocks);
+
+  it('returns 403 feature_not_available for free users', async () => {
+    const res = await request(focusApps.free).get('/api/focus-time');
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('feature_not_available');
+    expect(res.body.feature).toBe('focus time');
+  });
+
+  it('returns 200 for pro users', async () => {
+    mockDb._setWhereResults([[]]);
+
+    const res = await request(focusApps.pro).get('/api/focus-time');
+    expect(res.status).toBe(200);
+  });
+});
+
+// ── Quality Score Breakdown Gate ─────────────────────────────
 
 describe('Capability gates — GET /api/schedule/quality', () => {
   beforeEach(resetMocks);
@@ -336,8 +382,7 @@ describe('Capability gates — GET /api/schedule/quality', () => {
       [],
     ]);
 
-    const res = await request(freeScheduleApp).get('/api/schedule/quality?date=2026-03-15');
-
+    const res = await request(scheduleApps.free).get('/api/schedule/quality?date=2026-03-15');
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('overall');
     expect(res.body).not.toHaveProperty('components');
@@ -354,10 +399,75 @@ describe('Capability gates — GET /api/schedule/quality', () => {
       [],
     ]);
 
-    const res = await request(proScheduleApp).get('/api/schedule/quality?date=2026-03-15');
-
+    const res = await request(scheduleApps.pro).get('/api/schedule/quality?date=2026-03-15');
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('overall');
     expect(res.body).toHaveProperty('components');
+  });
+});
+
+// ── Self-Hosted Mode Simulation ──────────────────────────────
+// In production, self-hosted mode sets req.userPlan = 'pro' in the auth middleware.
+// We simulate this by creating apps with plan='pro', which mirrors the behavior.
+
+describe('Self-hosted mode (plan forced to pro)', () => {
+  beforeEach(resetMocks);
+
+  it('allows unlimited habits (same as pro)', async () => {
+    const newHabit = { id: 'sh-id', ...validHabitBody, priority: 3 };
+    mockDb._setWhereResults([[{ count: 100 }]]);
+    mockDb._mockReturning.mockResolvedValueOnce([newHabit]);
+
+    // Self-hosted users get plan='pro' from auth middleware
+    const res = await request(habitsApps.pro).post('/api/habits').send(validHabitBody);
+    expect(res.status).toBe(201);
+  });
+
+  it('allows analytics access (same as pro)', async () => {
+    mockDb._setWhereResults([[], []]);
+
+    const res = await request(analyticsApps.pro).get('/api/analytics');
+    expect(res.status).toBe(200);
+  });
+
+  it('allows focus time access (same as pro)', async () => {
+    mockDb._setWhereResults([[]]);
+
+    const res = await request(focusApps.pro).get('/api/focus-time');
+    expect(res.status).toBe(200);
+  });
+});
+
+// ── Error Response Format Consistency ────────────────────────
+
+describe('Error response format consistency', () => {
+  beforeEach(resetMocks);
+
+  it('count gate errors always include upgrade_url', async () => {
+    mockDb._setWhereResults([[{ count: 3 }]]);
+
+    const res = await request(habitsApps.free).post('/api/habits').send(validHabitBody);
+    expect(res.body.upgrade_url).toBe('/settings#billing');
+  });
+
+  it('capability gate errors always include upgrade_url', async () => {
+    const res = await request(analyticsApps.free).get('/api/analytics');
+    expect(res.body.upgrade_url).toBe('/settings#billing');
+  });
+
+  it('count gate errors include current and max fields', async () => {
+    mockDb._setWhereResults([[{ count: 3 }]]);
+
+    const res = await request(habitsApps.free).post('/api/habits').send(validHabitBody);
+    expect(res.body).toHaveProperty('current');
+    expect(res.body).toHaveProperty('max');
+    expect(typeof res.body.current).toBe('number');
+    expect(typeof res.body.max).toBe('number');
+  });
+
+  it('capability gate errors include feature field', async () => {
+    const res = await request(activityApps.free).get('/api/activity');
+    expect(res.body).toHaveProperty('feature');
+    expect(typeof res.body.feature).toBe('string');
   });
 });

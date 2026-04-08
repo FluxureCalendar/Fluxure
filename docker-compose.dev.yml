@@ -1,28 +1,23 @@
-# Development override — use with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Development services — start with: docker compose -f docker-compose.dev.yml up -d
+# Redis and Postgres are intentionally passwordless for local development convenience.
+# For staging/production, use docker-compose.yml (or docker-compose.selfhost.yml) which
+# require passwords via environment variables.
 services:
-  fluxure:
-    build:
-      context: .
-      target: builder
-    volumes:
-      - ./packages:/app/packages
-      - ./pnpm-lock.yaml:/app/pnpm-lock.yaml
-    ports:
-      - '3000:3000'
-      - '9229:9229' # Node.js debugger
-    environment:
-      - NODE_ENV=development
-    # No resource limits in dev
-    deploy:
-      resources:
-        limits:
-          cpus: ''
-          memory: ''
-
   postgres:
+    image: postgres:17-alpine
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: fluxure
+      POSTGRES_USER: fluxure
+      POSTGRES_PASSWORD: fluxure_dev
 
   redis:
+    image: redis:7-alpine
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
+
+volumes:
+  pgdata-dev:

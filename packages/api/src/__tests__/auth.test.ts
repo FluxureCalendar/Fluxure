@@ -2,8 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 
+// ============================================================
+// Hoisted mocks — env vars + DB/pool mocks
+// ============================================================
+
 const { mockDb, mockPool } = vi.hoisted(() => {
-  // Env vars must be set in hoisted block so they are available before module imports
   process.env.NODE_ENV = 'test';
   process.env.JWT_SECRET = 'test-jwt-secret-that-is-at-least-32-chars-long';
   process.env.EMAIL_PASSWORD_AUTH = 'true';
@@ -46,7 +49,6 @@ const { mockDb, mockPool } = vi.hoisted(() => {
   mockOrderBy.mockReturnValue({ limit: mockLimit });
   const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
 
-  // Pool mock for refresh token (raw SQL queries)
   const mockClient = {
     query: vi.fn().mockResolvedValue({ rows: [] }),
     release: vi.fn(),
@@ -90,20 +92,20 @@ const { mockDb, mockPool } = vi.hoisted(() => {
   return { mockDb, mockPool };
 });
 
+// ============================================================
+// Module mocks — consolidated in one block
+// ============================================================
+
 vi.mock('../db/pg-index.js', () => ({ db: mockDb, pool: () => mockPool }));
 vi.mock('express-rate-limit', () => ({
   default: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('../ws.js', () => ({
-  broadcastToUser: vi.fn(),
-  broadcast: vi.fn(),
-}));
-vi.mock('../polling-ref.js', () => ({
-  triggerReschedule: vi.fn(),
-}));
+vi.mock('../ws.js', () => ({ broadcastToUser: vi.fn(), broadcast: vi.fn() }));
+vi.mock('../polling-ref.js', () => ({ triggerReschedule: vi.fn() }));
 vi.mock('../auth/email.js', () => ({
   sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
   sendPasswordResetEmail: vi.fn().mockResolvedValue(undefined),
+  sendAccountDeletionEmail: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../google/index.js', () => ({
   createOAuth2Client: vi.fn(),
@@ -135,13 +137,13 @@ vi.mock('../cache/user-settings.js', () => ({
     timezone: 'America/New_York',
     schedulingWindowDays: 14,
     trimCompletedEvents: true,
-    pastEventRetentionDays: 7,
   }),
 }));
 vi.mock('../config.js', () => ({
   FRONTEND_URL: 'http://localhost:5173',
   allowedOrigins: ['http://localhost:5173'],
   INSTANCE_ID: 'test-instance',
+  isSelfHosted: () => false,
 }));
 vi.mock('../rate-limiters.js', () => ({
   createStore: vi.fn().mockReturnValue(undefined),
@@ -162,12 +164,22 @@ vi.mock('../logger.js', () => ({
   }),
 }));
 
+// ============================================================
+// Imports (after mocks)
+// ============================================================
+
 import authRouter from '../routes/auth.js';
 import { hashPassword } from '../auth/password.js';
 import { signAccessToken, hashToken } from '../auth/jwt.js';
 import cookieParser from 'cookie-parser';
 
-// Auth routes handle their own auth, so no pre-injected userId
+// ============================================================
+// Test helpers
+// ============================================================
+
+const TEST_USER_ID = '00000000-0000-0000-0000-000000000001';
+const TEST_EMAIL = 'test@example.com';
+
 function createAuthApp(): express.Express {
   const app = express();
   app.use(express.json());
@@ -180,8 +192,8 @@ const app = createAuthApp();
 
 function makeUserRow(overrides: Record<string, unknown> = {}) {
   return {
-    id: '00000000-0000-0000-0000-000000000001',
-    email: 'test@example.com',
+    id: TEST_USER_ID,
+    email: TEST_EMAIL,
     name: 'Test User',
     avatarUrl: null,
     emailVerified: true,
@@ -204,7 +216,7 @@ function makeUserRow(overrides: Record<string, unknown> = {}) {
 function makeSessionRow(overrides: Record<string, unknown> = {}) {
   return {
     id: '00000000-0000-0000-0000-000000000010',
-    userId: '00000000-0000-0000-0000-000000000001',
+    userId: TEST_USER_ID,
     refreshTokenHash: 'abc123',
     userAgent: 'TestAgent/1.0',
     ipAddress: '192.168.1.*',
@@ -212,6 +224,30 @@ function makeSessionRow(overrides: Record<string, unknown> = {}) {
     expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
     ...overrides,
   };
+}
+
+function makeAccessToken(overrides: Record<string, unknown> = {}) {
+  return signAccessToken({
+    userId: TEST_USER_ID,
+    email: TEST_EMAIL,
+    plan: 'free',
+    emailVerified: true,
+    hasGdprConsent: true,
+    gdprConsentVersion: '1.0',
+    ...overrides,
+  });
+}
+
+function authedGet(path: string) {
+  return request(app).get(path).set('Cookie', `access_token=${makeAccessToken()}`);
+}
+
+function authedPost(path: string) {
+  return request(app).post(path).set('Cookie', `access_token=${makeAccessToken()}`);
+}
+
+function authedDelete(path: string) {
+  return request(app).delete(path).set('Cookie', `access_token=${makeAccessToken()}`);
 }
 
 function resetMocks() {
@@ -230,488 +266,734 @@ function resetMocks() {
   mockPool._mockClient.query.mockResolvedValue({ rows: [] });
 }
 
-function makeAccessToken(
-  userId = '00000000-0000-0000-0000-000000000001',
-  overrides: Record<string, unknown> = {},
-) {
-  return signAccessToken({
-    userId,
-    email: 'test@example.com',
-    plan: 'free',
-    emailVerified: true,
-    hasGdprConsent: true,
-    gdprConsentVersion: '1.0',
-    ...overrides,
-  });
-}
+// ============================================================
+// Tests
+// ============================================================
 
-describe('POST /api/auth/signup', () => {
+describe('Auth Routes', () => {
   beforeEach(resetMocks);
 
-  it('creates a new user with valid input', async () => {
-    const newUser = makeUserRow({ emailVerified: false });
-    mockDb._setWhereResults([[], [{ count: 0 }], [newUser]]);
-    mockDb._mockReturning.mockResolvedValueOnce([newUser]);
+  // ----------------------------------------------------------
+  // POST /api/auth/signup
+  // ----------------------------------------------------------
 
-    const res = await request(app).post('/api/auth/signup').send({
-      email: 'test@example.com',
+  describe('POST /api/auth/signup', () => {
+    const validSignup = {
+      email: TEST_EMAIL,
       password: 'StrongPass123!',
       name: 'Test User',
       gdprConsent: true,
-    });
-
-    expect(res.status).toBe(201);
-    expect(res.body.user).toBeDefined();
-    expect(res.body.user.email).toBe('test@example.com');
-  });
-
-  it('returns 409 for duplicate email', async () => {
-    const existing = makeUserRow();
-    mockDb._setWhereResults([[existing]]);
-
-    const res = await request(app).post('/api/auth/signup').send({
-      email: 'test@example.com',
-      password: 'StrongPass123!',
-      name: 'Test User',
-      gdprConsent: true,
-    });
-
-    expect(res.status).toBe(409);
-    expect(res.body.error).toContain('already exists');
-  });
-
-  it('returns 409 with GOOGLE_ACCOUNT code for Google-linked email', async () => {
-    const existing = makeUserRow({ googleId: 'google-123' });
-    mockDb._setWhereResults([[existing]]);
-
-    const res = await request(app).post('/api/auth/signup').send({
-      email: 'test@example.com',
-      password: 'StrongPass123!',
-      name: 'Test User',
-      gdprConsent: true,
-    });
-
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('GOOGLE_ACCOUNT');
-  });
-
-  it('returns 400 for invalid email format', async () => {
-    const res = await request(app).post('/api/auth/signup').send({
-      email: 'not-an-email',
-      password: 'StrongPass123!',
-      name: 'Test User',
-      gdprConsent: true,
-    });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Validation failed');
-  });
-
-  it('returns 400 for weak password (too short)', async () => {
-    const res = await request(app).post('/api/auth/signup').send({
-      email: 'test@example.com',
-      password: 'short',
-      name: 'Test User',
-      gdprConsent: true,
-    });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Validation failed');
-  });
-
-  it('returns 400 for missing required fields', async () => {
-    const res = await request(app).post('/api/auth/signup').send({
-      email: 'test@example.com',
-    });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Validation failed');
-  });
-
-  it('returns 400 when GDPR consent is not provided', async () => {
-    const res = await request(app).post('/api/auth/signup').send({
-      email: 'test@example.com',
-      password: 'StrongPass123!',
-      name: 'Test User',
-    });
-
-    expect(res.status).toBe(400);
-  });
-});
-
-describe('POST /api/auth/login', () => {
-  beforeEach(resetMocks);
-
-  it('logs in with valid credentials', async () => {
-    const hash = await hashPassword('CorrectPassword1!');
-    const user = makeUserRow({ passwordHash: hash });
-    mockDb._setWhereResults([[user], [{ count: 0 }], [user]]);
-
-    const res = await request(app).post('/api/auth/login').send({
-      email: 'test@example.com',
-      password: 'CorrectPassword1!',
-    });
-
-    expect(res.status).toBe(200);
-    expect(res.body.user).toBeDefined();
-    expect(res.body.user.email).toBe('test@example.com');
-  });
-
-  it('returns 401 for wrong password', async () => {
-    const hash = await hashPassword('CorrectPassword1!');
-    const user = makeUserRow({ passwordHash: hash });
-    mockDb._setWhereResults([[user]]);
-
-    const res = await request(app).post('/api/auth/login').send({
-      email: 'test@example.com',
-      password: 'WrongPassword1!',
-    });
-
-    expect(res.status).toBe(401);
-    expect(res.body.error).toBe('Invalid email or password');
-  });
-
-  it('returns 401 for non-existent email', async () => {
-    mockDb._setWhereResults([[]]);
-
-    const res = await request(app).post('/api/auth/login').send({
-      email: 'nobody@example.com',
-      password: 'SomePassword1!',
-    });
-
-    expect(res.status).toBe(401);
-    expect(res.body.error).toBe('Invalid email or password');
-  });
-
-  it('returns 409 for Google-only account', async () => {
-    const user = makeUserRow({ passwordHash: null, googleId: 'google-123' });
-    mockDb._setWhereResults([[user]]);
-
-    const res = await request(app).post('/api/auth/login').send({
-      email: 'test@example.com',
-      password: 'SomePassword1!',
-    });
-
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('GOOGLE_ACCOUNT');
-  });
-
-  it('returns 400 for missing fields', async () => {
-    const res = await request(app).post('/api/auth/login').send({});
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Validation failed');
-  });
-});
-
-describe('POST /api/auth/logout', () => {
-  beforeEach(resetMocks);
-
-  it('logs out successfully with a refresh token cookie', async () => {
-    const res = await request(app)
-      .post('/api/auth/logout')
-      .set('Cookie', 'refresh_token=some-token');
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-  });
-
-  it('succeeds even without a refresh token cookie', async () => {
-    const res = await request(app).post('/api/auth/logout');
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-  });
-});
-
-describe('POST /api/auth/refresh', () => {
-  beforeEach(resetMocks);
-
-  it('returns 401 when no refresh token cookie is present', async () => {
-    const res = await request(app).post('/api/auth/refresh');
-
-    expect(res.status).toBe(401);
-    expect(res.body.error).toBe('No refresh token');
-  });
-
-  it('returns 401 for invalid/expired refresh token', async () => {
-    mockPool._mockClient.query.mockResolvedValue({ rows: [] });
-
-    const res = await request(app)
-      .post('/api/auth/refresh')
-      .set('Cookie', 'refresh_token=invalid-token');
-
-    expect(res.status).toBe(401);
-    expect(res.body.error).toContain('Invalid or expired');
-  });
-
-  it('refreshes successfully with valid refresh token', async () => {
-    const user = makeUserRow();
-    mockPool._mockClient.query
-      .mockResolvedValueOnce(undefined) // BEGIN
-      .mockResolvedValueOnce({
-        rows: [{ id: 'session-1', user_id: user.id }],
-      }) // SELECT FOR UPDATE
-      .mockResolvedValueOnce(undefined) // DELETE old session
-      .mockResolvedValueOnce(undefined); // COMMIT
-
-    mockDb._setWhereResults([[user], [{ count: 0 }], [user]]);
-
-    const res = await request(app)
-      .post('/api/auth/refresh')
-      .set('Cookie', 'refresh_token=valid-refresh-token');
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-  });
-});
-
-describe('GET /api/auth/verify-email', () => {
-  beforeEach(resetMocks);
-
-  it('verifies email with valid token', async () => {
-    const verification = {
-      id: 'v1',
-      userId: '00000000-0000-0000-0000-000000000001',
-      tokenHash: hashToken('valid-token'),
-      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     };
-    mockDb._setWhereResults([[verification]]);
 
-    const res = await request(app).get('/api/auth/verify-email?token=valid-token');
+    it('creates a new user with valid input and returns 201', async () => {
+      const newUser = makeUserRow({ emailVerified: false });
+      mockDb._setWhereResults([[], [{ count: 0 }], [newUser]]);
+      mockDb._mockReturning.mockResolvedValueOnce([newUser]);
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.message).toContain('verified');
-  });
+      const res = await request(app).post('/api/auth/signup').send(validSignup);
 
-  it('returns 400 for expired/invalid token', async () => {
-    mockDb._setWhereResults([[]]);
-
-    const res = await request(app).get('/api/auth/verify-email?token=expired-token');
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('Invalid or expired');
-  });
-
-  it('returns 400 when token is missing', async () => {
-    const res = await request(app).get('/api/auth/verify-email');
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('Missing verification token');
-  });
-});
-
-describe('POST /api/auth/forgot-password', () => {
-  beforeEach(resetMocks);
-
-  it('returns success message for existing email', async () => {
-    const user = makeUserRow();
-    mockDb._setWhereResults([[user]]);
-
-    const res = await request(app).post('/api/auth/forgot-password').send({
-      email: 'test@example.com',
+      expect(res.status).toBe(201);
+      expect(res.body.user).toBeDefined();
+      expect(res.body.user.email).toBe(TEST_EMAIL);
     });
 
-    expect(res.status).toBe(200);
-    expect(res.body.message).toContain('reset link');
-  });
+    it('returns 409 when email already exists', async () => {
+      mockDb._setWhereResults([[makeUserRow()]]);
 
-  it('returns success message even for non-existent email (no enumeration)', async () => {
-    mockDb._setWhereResults([[]]);
+      const res = await request(app).post('/api/auth/signup').send(validSignup);
 
-    const res = await request(app).post('/api/auth/forgot-password').send({
-      email: 'nobody@example.com',
+      expect(res.status).toBe(409);
+      expect(res.body.error).toContain('already exists');
     });
 
-    expect(res.status).toBe(200);
-    expect(res.body.message).toContain('reset link');
-  });
+    it('returns generic 409 for Google-linked email without leaking account type', async () => {
+      mockDb._setWhereResults([[makeUserRow({ googleId: 'google-123' })]]);
 
-  it('returns 400 for invalid email', async () => {
-    const res = await request(app).post('/api/auth/forgot-password').send({
-      email: 'not-email',
+      const res = await request(app).post('/api/auth/signup').send(validSignup);
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toContain('already exists');
+      expect(res.body.code).toBeUndefined();
     });
 
-    expect(res.status).toBe(400);
-  });
-});
+    it('returns 400 for invalid email format', async () => {
+      const res = await request(app)
+        .post('/api/auth/signup')
+        .send({ ...validSignup, email: 'not-an-email' });
 
-describe('POST /api/auth/reset-password', () => {
-  beforeEach(resetMocks);
-
-  it('resets password with valid token', async () => {
-    const resetRow = {
-      id: 'r1',
-      userId: '00000000-0000-0000-0000-000000000001',
-      tokenHash: hashToken('valid-reset-token'),
-      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      usedAt: null,
-    };
-    mockDb._mockReturning.mockResolvedValueOnce([resetRow]);
-
-    const res = await request(app).post('/api/auth/reset-password').send({
-      token: 'valid-reset-token',
-      password: 'NewStrongPass1!',
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Validation failed');
     });
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.message).toContain('reset successfully');
-  });
+    it('returns 400 for weak password', async () => {
+      const res = await request(app)
+        .post('/api/auth/signup')
+        .send({ ...validSignup, password: 'short' });
 
-  it('returns 400 for expired/used token', async () => {
-    mockDb._mockReturning.mockResolvedValueOnce([]);
-
-    const res = await request(app).post('/api/auth/reset-password').send({
-      token: 'expired-token',
-      password: 'NewStrongPass1!',
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Validation failed');
     });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('Invalid or expired');
-  });
+    it('returns 400 when required fields are missing', async () => {
+      const res = await request(app).post('/api/auth/signup').send({ email: TEST_EMAIL });
 
-  it('returns 400 for weak new password', async () => {
-    const res = await request(app).post('/api/auth/reset-password').send({
-      token: 'some-token',
-      password: 'short',
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Validation failed');
     });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Validation failed');
-  });
-});
+    it('returns 400 when GDPR consent is not provided', async () => {
+      const { gdprConsent: _, ...noConsent } = validSignup;
+      const res = await request(app).post('/api/auth/signup').send(noConsent);
 
-describe('GET /api/auth/me', () => {
-  beforeEach(resetMocks);
-
-  it('returns user when authenticated', async () => {
-    const user = makeUserRow();
-    mockDb._setWhereResults([[user]]);
-    const token = makeAccessToken();
-
-    const res = await request(app).get('/api/auth/me').set('Cookie', `access_token=${token}`);
-
-    expect(res.status).toBe(200);
-    expect(res.body.user).toBeDefined();
-    expect(res.body.user.email).toBe('test@example.com');
+      expect(res.status).toBe(400);
+    });
   });
 
-  it('returns 401 when not authenticated', async () => {
-    const res = await request(app).get('/api/auth/me');
+  // ----------------------------------------------------------
+  // POST /api/auth/login
+  // ----------------------------------------------------------
 
-    expect(res.status).toBe(401);
-    expect(res.body.error).toBe('Authentication required');
+  describe('POST /api/auth/login', () => {
+    const validLogin = { email: TEST_EMAIL, password: 'CorrectPassword1!' };
+
+    it('authenticates with valid credentials and returns user', async () => {
+      const hash = await hashPassword('CorrectPassword1!');
+      const user = makeUserRow({ passwordHash: hash });
+      mockDb._setWhereResults([[user], [{ count: 0 }], [user]]);
+
+      const res = await request(app).post('/api/auth/login').send(validLogin);
+
+      expect(res.status).toBe(200);
+      expect(res.body.user).toBeDefined();
+      expect(res.body.user.email).toBe(TEST_EMAIL);
+    });
+
+    it('returns 401 for incorrect password', async () => {
+      const hash = await hashPassword('CorrectPassword1!');
+      const user = makeUserRow({ passwordHash: hash });
+      mockDb._setWhereResults([[user]]);
+
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ ...validLogin, password: 'WrongPassword1!' });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('Invalid email or password');
+    });
+
+    it('returns 401 for non-existent email without leaking existence', async () => {
+      mockDb._setWhereResults([[]]);
+
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'nobody@example.com', password: 'SomePassword1!' });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('Invalid email or password');
+    });
+
+    it('returns generic 401 for Google-only account without leaking account type', async () => {
+      const user = makeUserRow({ passwordHash: null, googleId: 'google-123' });
+      mockDb._setWhereResults([[user]]);
+
+      const res = await request(app).post('/api/auth/login').send(validLogin);
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('Invalid email or password');
+    });
+
+    it('returns 400 when fields are missing', async () => {
+      const res = await request(app).post('/api/auth/login').send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Validation failed');
+    });
   });
 
-  it('returns 401 with invalid token', async () => {
-    const res = await request(app)
-      .get('/api/auth/me')
-      .set('Cookie', 'access_token=invalid-jwt-token');
+  // ----------------------------------------------------------
+  // POST /api/auth/logout
+  // ----------------------------------------------------------
 
-    expect(res.status).toBe(401);
-    expect(res.body.error).toContain('Invalid or expired');
-  });
-});
+  describe('POST /api/auth/logout', () => {
+    it('clears session and returns success with refresh token cookie', async () => {
+      const res = await request(app)
+        .post('/api/auth/logout')
+        .set('Cookie', 'refresh_token=some-token');
 
-describe('GET /api/auth/sessions', () => {
-  beforeEach(resetMocks);
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
 
-  it('returns list of sessions when authenticated', async () => {
-    const session = makeSessionRow();
-    mockDb._setWhereResults([[session]]);
-    const token = makeAccessToken();
+    it('succeeds gracefully without a refresh token cookie', async () => {
+      const res = await request(app).post('/api/auth/logout');
 
-    const res = await request(app).get('/api/auth/sessions').set('Cookie', `access_token=${token}`);
-
-    expect(res.status).toBe(200);
-    expect(res.body.sessions).toBeDefined();
-    expect(Array.isArray(res.body.sessions)).toBe(true);
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
   });
 
-  it('returns 401 when not authenticated', async () => {
-    const res = await request(app).get('/api/auth/sessions');
+  // ----------------------------------------------------------
+  // POST /api/auth/refresh
+  // ----------------------------------------------------------
 
-    expect(res.status).toBe(401);
+  describe('POST /api/auth/refresh', () => {
+    it('returns 401 when no refresh token cookie is present', async () => {
+      const res = await request(app).post('/api/auth/refresh');
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('No refresh token');
+    });
+
+    it('returns 401 for invalid or expired refresh token', async () => {
+      mockPool._mockClient.query.mockResolvedValue({ rows: [] });
+
+      const res = await request(app)
+        .post('/api/auth/refresh')
+        .set('Cookie', 'refresh_token=invalid-token');
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toContain('Invalid or expired');
+    });
+
+    it('rotates tokens and returns success with valid refresh token', async () => {
+      const user = makeUserRow();
+      mockPool._mockClient.query
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'session-1', user_id: user.id }] }) // SELECT FOR UPDATE
+        .mockResolvedValueOnce(undefined) // DELETE old session
+        .mockResolvedValueOnce(undefined); // COMMIT
+
+      mockDb._setWhereResults([[user], [{ count: 0 }], [user]]);
+
+      const res = await request(app)
+        .post('/api/auth/refresh')
+        .set('Cookie', 'refresh_token=valid-refresh-token');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
   });
-});
 
-describe('DELETE /api/auth/sessions/:id', () => {
-  beforeEach(resetMocks);
+  // ----------------------------------------------------------
+  // GET /api/auth/verify-email
+  // ----------------------------------------------------------
 
-  it('revokes a session', async () => {
-    const session = makeSessionRow();
-    mockDb._setWhereResults([[session]]);
-    const token = makeAccessToken();
+  describe('GET /api/auth/verify-email', () => {
+    it('verifies email with valid token', async () => {
+      const verification = {
+        id: 'v1',
+        userId: TEST_USER_ID,
+        tokenHash: hashToken('valid-token'),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      };
+      mockDb._setWhereResults([[verification]]);
 
-    const res = await request(app)
-      .delete(`/api/auth/sessions/${session.id}`)
-      .set('Cookie', `access_token=${token}`);
+      const res = await request(app).get('/api/auth/verify-email?token=valid-token');
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.message).toContain('revoked');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toContain('verified');
+    });
+
+    it('returns 400 for expired or invalid token', async () => {
+      mockDb._setWhereResults([[]]);
+
+      const res = await request(app).get('/api/auth/verify-email?token=expired-token');
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Invalid or expired');
+    });
+
+    it('returns 400 when token query parameter is missing', async () => {
+      const res = await request(app).get('/api/auth/verify-email');
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Missing verification token');
+    });
   });
 
-  it('returns 404 for non-existent session', async () => {
-    mockDb._setWhereResults([[]]);
-    const token = makeAccessToken();
+  // ----------------------------------------------------------
+  // POST /api/auth/resend-verification-email
+  // ----------------------------------------------------------
 
-    const res = await request(app)
-      .delete('/api/auth/sessions/00000000-0000-0000-0000-000000000099')
-      .set('Cookie', `access_token=${token}`);
+  describe('POST /api/auth/resend-verification-email', () => {
+    it('returns success for existing unverified user', async () => {
+      const user = makeUserRow({ emailVerified: false });
+      mockDb._setWhereResults([[user]]);
 
-    expect(res.status).toBe(404);
+      const res = await request(app)
+        .post('/api/auth/resend-verification-email')
+        .send({ email: TEST_EMAIL });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toContain('verification email');
+    });
+
+    it('returns success even for non-existent email to prevent enumeration', async () => {
+      mockDb._setWhereResults([[]]);
+
+      const res = await request(app)
+        .post('/api/auth/resend-verification-email')
+        .send({ email: 'nobody@example.com' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    it('returns success for already-verified user without sending email', async () => {
+      const user = makeUserRow({ emailVerified: true });
+      mockDb._setWhereResults([[user]]);
+
+      const { sendVerificationEmail } = await import('../auth/email.js');
+
+      const res = await request(app)
+        .post('/api/auth/resend-verification-email')
+        .send({ email: TEST_EMAIL });
+
+      expect(res.status).toBe(200);
+      expect(sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for invalid email format', async () => {
+      const res = await request(app)
+        .post('/api/auth/resend-verification-email')
+        .send({ email: 'not-email' });
+
+      expect(res.status).toBe(400);
+    });
   });
 
-  it('returns 400 for invalid session ID format', async () => {
-    const token = makeAccessToken();
+  // ----------------------------------------------------------
+  // POST /api/auth/forgot-password
+  // ----------------------------------------------------------
 
-    const res = await request(app)
-      .delete('/api/auth/sessions/not-a-uuid')
-      .set('Cookie', `access_token=${token}`);
+  describe('POST /api/auth/forgot-password', () => {
+    it('returns success message for existing email', async () => {
+      mockDb._setWhereResults([[makeUserRow()]]);
 
-    expect(res.status).toBe(400);
+      const res = await request(app).post('/api/auth/forgot-password').send({ email: TEST_EMAIL });
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toContain('reset link');
+    });
+
+    it('returns success even for non-existent email to prevent enumeration', async () => {
+      mockDb._setWhereResults([[]]);
+
+      const res = await request(app)
+        .post('/api/auth/forgot-password')
+        .send({ email: 'nobody@example.com' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toContain('reset link');
+    });
+
+    it('returns 400 for invalid email format', async () => {
+      const res = await request(app).post('/api/auth/forgot-password').send({ email: 'not-email' });
+
+      expect(res.status).toBe(400);
+    });
   });
-});
 
-describe('POST /api/auth/change-password', () => {
-  beforeEach(resetMocks);
+  // ----------------------------------------------------------
+  // POST /api/auth/reset-password
+  // ----------------------------------------------------------
 
-  it('changes password with correct current password', async () => {
-    const hash = await hashPassword('CurrentPass1!');
-    const user = makeUserRow({ passwordHash: hash });
-    mockDb._setWhereResults([[user]]);
-    const token = makeAccessToken();
+  describe('POST /api/auth/reset-password', () => {
+    it('resets password with valid unused token', async () => {
+      const resetRow = {
+        id: 'r1',
+        userId: TEST_USER_ID,
+        tokenHash: hashToken('valid-reset-token'),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        usedAt: null,
+      };
+      mockDb._mockReturning.mockResolvedValueOnce([resetRow]);
 
-    const res = await request(app)
-      .post('/api/auth/change-password')
-      .set('Cookie', `access_token=${token}`)
-      .send({
+      const res = await request(app).post('/api/auth/reset-password').send({
+        token: 'valid-reset-token',
+        password: 'NewStrongPass1!',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toContain('reset successfully');
+    });
+
+    it('returns 400 for expired or already-used token', async () => {
+      mockDb._mockReturning.mockResolvedValueOnce([]);
+
+      const res = await request(app).post('/api/auth/reset-password').send({
+        token: 'expired-token',
+        password: 'NewStrongPass1!',
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Invalid or expired');
+    });
+
+    it('returns 400 for weak new password', async () => {
+      const res = await request(app).post('/api/auth/reset-password').send({
+        token: 'some-token',
+        password: 'short',
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Validation failed');
+    });
+
+    it('returns 400 when token is missing', async () => {
+      const res = await request(app).post('/api/auth/reset-password').send({
+        password: 'NewStrongPass1!',
+      });
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // GET /api/auth/me
+  // ----------------------------------------------------------
+
+  describe('GET /api/auth/me', () => {
+    it('returns current user when authenticated', async () => {
+      mockDb._setWhereResults([[makeUserRow()]]);
+
+      const res = await authedGet('/api/auth/me');
+
+      expect(res.status).toBe(200);
+      expect(res.body.user).toBeDefined();
+      expect(res.body.user.email).toBe(TEST_EMAIL);
+    });
+
+    it('returns 401 when no access token is present', async () => {
+      const res = await request(app).get('/api/auth/me');
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('Authentication required');
+    });
+
+    it('returns 401 with invalid JWT token', async () => {
+      const res = await request(app)
+        .get('/api/auth/me')
+        .set('Cookie', 'access_token=invalid-jwt-token');
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toContain('Invalid or expired');
+    });
+
+    it('returns 404 when authenticated user no longer exists in DB', async () => {
+      mockDb._setWhereResults([[]]);
+
+      const res = await authedGet('/api/auth/me');
+
+      expect(res.status).toBe(404);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // GET /api/auth/sessions
+  // ----------------------------------------------------------
+
+  describe('GET /api/auth/sessions', () => {
+    it('returns list of active sessions when authenticated', async () => {
+      mockDb._setWhereResults([[makeSessionRow()]]);
+
+      const res = await authedGet('/api/auth/sessions');
+
+      expect(res.status).toBe(200);
+      expect(res.body.sessions).toBeDefined();
+      expect(Array.isArray(res.body.sessions)).toBe(true);
+    });
+
+    it('returns 401 when not authenticated', async () => {
+      const res = await request(app).get('/api/auth/sessions');
+
+      expect(res.status).toBe(401);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // DELETE /api/auth/sessions/:id
+  // ----------------------------------------------------------
+
+  describe('DELETE /api/auth/sessions/:id', () => {
+    const sessionId = '00000000-0000-0000-0000-000000000010';
+
+    it('revokes a specific session', async () => {
+      mockDb._setWhereResults([[makeSessionRow()]]);
+
+      const res = await authedDelete(`/api/auth/sessions/${sessionId}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toContain('revoked');
+    });
+
+    it('returns 404 for non-existent session', async () => {
+      mockDb._setWhereResults([[]]);
+
+      const res = await authedDelete('/api/auth/sessions/00000000-0000-0000-0000-000000000099');
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 400 for invalid UUID format', async () => {
+      const res = await authedDelete('/api/auth/sessions/not-a-uuid');
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // POST /api/auth/change-password
+  // ----------------------------------------------------------
+
+  describe('POST /api/auth/change-password', () => {
+    it('changes password when current password is correct', async () => {
+      const hash = await hashPassword('CurrentPass1!');
+      mockDb._setWhereResults([[makeUserRow({ passwordHash: hash })]]);
+
+      const res = await authedPost('/api/auth/change-password').send({
         currentPassword: 'CurrentPass1!',
         newPassword: 'NewStrongPass1!',
       });
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-  });
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
 
-  it('returns 403 for incorrect current password', async () => {
-    const hash = await hashPassword('CurrentPass1!');
-    const user = makeUserRow({ passwordHash: hash });
-    mockDb._setWhereResults([[user]]);
-    const token = makeAccessToken();
+    it('returns 403 when current password is incorrect', async () => {
+      const hash = await hashPassword('CurrentPass1!');
+      mockDb._setWhereResults([[makeUserRow({ passwordHash: hash })]]);
 
-    const res = await request(app)
-      .post('/api/auth/change-password')
-      .set('Cookie', `access_token=${token}`)
-      .send({
+      const res = await authedPost('/api/auth/change-password').send({
         currentPassword: 'WrongCurrent1!',
         newPassword: 'NewStrongPass1!',
       });
 
-    expect(res.status).toBe(403);
-    expect(res.body.error).toContain('incorrect');
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('incorrect');
+    });
+
+    it('returns 400 when new password is too weak', async () => {
+      const res = await authedPost('/api/auth/change-password').send({
+        currentPassword: 'CurrentPass1!',
+        newPassword: 'short',
+      });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 401 when not authenticated', async () => {
+      const res = await request(app).post('/api/auth/change-password').send({
+        currentPassword: 'CurrentPass1!',
+        newPassword: 'NewStrongPass1!',
+      });
+
+      expect(res.status).toBe(401);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // POST /api/auth/export-request
+  // ----------------------------------------------------------
+
+  describe('POST /api/auth/export-request', () => {
+    it('accepts export request with valid categories', async () => {
+      mockDb._setWhereResults([[makeUserRow()]]);
+
+      const res = await authedPost('/api/auth/export-request').send({
+        categories: ['profile', 'habits'],
+      });
+
+      expect(res.status).toBe(202);
+      expect(res.body.message).toContain('Export request accepted');
+    });
+
+    it('returns 400 for empty categories array', async () => {
+      const res = await authedPost('/api/auth/export-request').send({
+        categories: [],
+      });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 400 for invalid category names', async () => {
+      const res = await authedPost('/api/auth/export-request').send({
+        categories: ['nonexistent'],
+      });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 401 when not authenticated', async () => {
+      const res = await request(app)
+        .post('/api/auth/export-request')
+        .send({
+          categories: ['profile'],
+        });
+
+      expect(res.status).toBe(401);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // DELETE /api/auth/account
+  // ----------------------------------------------------------
+
+  describe('DELETE /api/auth/account', () => {
+    it('deletes account with correct password confirmation', async () => {
+      const hash = await hashPassword('CurrentPass1!');
+      const user = makeUserRow({ passwordHash: hash });
+      mockDb._setWhereResults([[user]]);
+
+      const res = await authedDelete('/api/auth/account').send({
+        confirm: true,
+        password: 'CurrentPass1!',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    it('returns 400 when confirm is not true', async () => {
+      const res = await authedDelete('/api/auth/account').send({
+        confirm: false,
+      });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 400 when password-having user omits password', async () => {
+      const user = makeUserRow();
+      mockDb._setWhereResults([[user]]);
+
+      const res = await authedDelete('/api/auth/account').send({
+        confirm: true,
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Password is required');
+    });
+
+    it('returns 403 when password confirmation is wrong', async () => {
+      const hash = await hashPassword('CurrentPass1!');
+      const user = makeUserRow({ passwordHash: hash });
+      mockDb._setWhereResults([[user]]);
+
+      const res = await authedDelete('/api/auth/account').send({
+        confirm: true,
+        password: 'WrongPassword1!',
+      });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('Invalid password');
+    });
+
+    it('deletes Google-only account with email confirmation', async () => {
+      const user = makeUserRow({
+        passwordHash: null,
+        googleId: 'google-123',
+        googleRefreshToken: 'encrypted:refresh-token',
+      });
+      mockDb._setWhereResults([[user]]);
+
+      const res = await authedDelete('/api/auth/account').send({
+        confirm: true,
+        email: TEST_EMAIL,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    it('returns 400 for Google-only account with wrong email', async () => {
+      const user = makeUserRow({
+        passwordHash: null,
+        googleId: 'google-123',
+        googleRefreshToken: 'encrypted:refresh-token',
+      });
+      mockDb._setWhereResults([[user]]);
+
+      const res = await authedDelete('/api/auth/account').send({
+        confirm: true,
+        email: 'wrong@example.com',
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Email confirmation required');
+    });
+
+    it('returns 401 when not authenticated', async () => {
+      const res = await request(app).delete('/api/auth/account').send({
+        confirm: true,
+        password: 'pass',
+      });
+
+      expect(res.status).toBe(401);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // POST /api/auth/consent/withdraw
+  // ----------------------------------------------------------
+
+  describe('POST /api/auth/consent/withdraw', () => {
+    it('withdraws GDPR consent and pauses scheduling', async () => {
+      const user = makeUserRow();
+      mockDb._setWhereResults([[user], [{ count: 0 }], [user]]);
+
+      const res = await authedPost('/api/auth/consent/withdraw');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toContain('Consent withdrawn');
+    });
+
+    it('returns 404 when user does not exist', async () => {
+      mockDb._setWhereResults([[]]);
+
+      const res = await authedPost('/api/auth/consent/withdraw');
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 401 when not authenticated', async () => {
+      const res = await request(app).post('/api/auth/consent/withdraw');
+
+      expect(res.status).toBe(401);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // GET /api/auth/google/status
+  // ----------------------------------------------------------
+
+  describe('GET /api/auth/google/status', () => {
+    it('returns connected: true when Google refresh token exists', async () => {
+      mockDb._setWhereResults([[makeUserRow({ googleRefreshToken: 'encrypted:token' })]]);
+
+      const res = await authedGet('/api/auth/google/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.connected).toBe(true);
+    });
+
+    it('returns connected: false when no Google refresh token', async () => {
+      mockDb._setWhereResults([[makeUserRow({ googleRefreshToken: null })]]);
+
+      const res = await authedGet('/api/auth/google/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.connected).toBe(false);
+    });
+
+    it('returns 401 when not authenticated', async () => {
+      const res = await request(app).get('/api/auth/google/status');
+
+      expect(res.status).toBe(401);
+    });
   });
 });

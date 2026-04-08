@@ -1,12 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly, fade } from 'svelte/transition';
-  import type { Habit, DayOfWeek } from '@fluxure/shared';
-  import { SchedulingHours, Priority } from '@fluxure/shared';
-  import { habits } from '$lib/api';
+  import type {
+    SmartMeeting,
+    CreateMeetingRequest,
+    ConferenceType,
+    DayOfWeek,
+  } from '@fluxure/shared';
+  import { Frequency, Priority } from '@fluxure/shared';
+  import { meetings } from '$lib/api';
   import { showToast } from '$lib/toast.svelte';
-  import { createSchedulingTemplateState } from '$lib/scheduling-templates.svelte';
-  import { getCachedSettings } from '$lib/cache.svelte';
   import TimeRangeSlider from '$lib/components/TimeRangeSlider.svelte';
   import DurationSlider from '$lib/components/DurationSlider.svelte';
   import TimeSlider from '$lib/components/TimeSlider.svelte';
@@ -16,38 +19,31 @@
 
   let {
     open,
-    habit,
+    meeting,
     onclose,
     onsaved,
   }: {
     open: boolean;
-    habit: Habit | null;
+    meeting: SmartMeeting | null;
     onclose: () => void;
     onsaved?: () => void;
   } = $props();
 
-  const isEdit = $derived(habit !== null);
+  const isEdit = $derived(meeting !== null);
 
   let name = $state('');
-  let durationMin = $state(30);
-  let durationMax = $state(30);
+  let duration = $state(30);
   let windowStart = $state('09:00');
   let windowEnd = $state('17:00');
-  let idealTime = $state('09:00');
-  let selectedDays = $state<DayOfWeek[]>(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']);
-  let schedulingHours = $state<SchedulingHours>(SchedulingHours.Working);
+  let idealTime = $state('10:00');
+  let frequency = $state<Frequency>(Frequency.Weekly);
+  let selectedDays = $state<DayOfWeek[]>(['mon', 'tue', 'wed', 'thu', 'fri']);
   let priority = $state<Priority>(Priority.Medium);
-  let color = $state('#5BAD8A');
+  let conferenceType = $state<ConferenceType>('none');
+  let location = $state('');
+  let attendees = $state('');
+  let color = $state('#5B8DB8');
   let saving = $state(false);
-
-  const tmpl = createSchedulingTemplateState();
-
-  function fmtDuration(mins: number): string {
-    if (mins < 60) return `${mins}m`;
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return m ? `${h}h ${m}m` : `${h}h`;
-  }
 
   function fmtTimeAmPm(t: string): string {
     const [hStr, mStr] = t.split(':');
@@ -58,57 +54,26 @@
     return m === 0 ? `${h12} ${suffix}` : `${h12}:${String(m).padStart(2, '0')} ${suffix}`;
   }
 
-  function minsToTime(mins: number): string {
-    const c = Math.max(0, Math.min(1410, mins));
-    return `${String(Math.floor(c / 60)).padStart(2, '0')}:${String(c % 60).padStart(2, '0')}`;
-  }
-
   function timeToMins(t: string): number {
     const [h, m] = t.split(':').map(Number);
     return h * 60 + (m || 0);
   }
 
-  // Keep durationMax >= durationMin
-  $effect(() => {
-    if (durationMax < durationMin) durationMax = durationMin;
-  });
+  function minsToTime(mins: number): string {
+    const c = Math.max(0, Math.min(1410, mins));
+    return `${String(Math.floor(c / 60)).padStart(2, '0')}:${String(c % 60).padStart(2, '0')}`;
+  }
 
-  // Compute ideal time bounds from the scheduling window
   // Convert a window-end time to minutes, treating "00:00" as end-of-day (1410 = 23:30)
   function windowEndToMins(t: string): number {
     const mins = timeToMins(t);
     return mins === 0 && t === '00:00' ? 1410 : mins;
   }
 
-  let idealMinMins = $derived.by(() => {
-    const config = getCachedSettings();
-    if (schedulingHours === SchedulingHours.Custom) return timeToMins(windowStart);
-    if (schedulingHours === SchedulingHours.Personal)
-      return timeToMins(config?.settings?.personalHours?.start || '17:00');
-    // Working or template
-    const tmplMatch = tmpl.state.templates.find(
-      (t) => `template:${t.id}` === tmpl.getDropdownValue(schedulingHours),
-    );
-    if (tmplMatch) return timeToMins(tmplMatch.startTime);
-    return timeToMins(config?.settings?.workingHours?.start || '09:00');
-  });
-
-  let idealMaxMins = $derived.by(() => {
-    const config = getCachedSettings();
-    if (schedulingHours === SchedulingHours.Custom) return windowEndToMins(windowEnd);
-    if (schedulingHours === SchedulingHours.Personal)
-      return windowEndToMins(config?.settings?.personalHours?.end || '22:00');
-    const tmplMatch = tmpl.state.templates.find(
-      (t) => `template:${t.id}` === tmpl.getDropdownValue(schedulingHours),
-    );
-    if (tmplMatch) return windowEndToMins(tmplMatch.endTime);
-    return windowEndToMins(config?.settings?.workingHours?.end || '17:00');
-  });
-
-  // Clamp ideal time to scheduling window
+  // Clamp ideal time to window
   $effect(() => {
-    const minM = idealMinMins;
-    const maxM = idealMaxMins;
+    const minM = timeToMins(windowStart);
+    const maxM = windowEndToMins(windowEnd);
     const cur = timeToMins(idealTime);
     if (cur < minM) idealTime = minsToTime(minM);
     else if (cur > maxM) idealTime = minsToTime(maxM);
@@ -117,20 +82,18 @@
   let validationError = $derived(
     !name.trim()
       ? 'Name is required'
-      : durationMin < 5
-        ? 'Min duration must be at least 5 minutes'
-        : durationMax < durationMin
-          ? 'Max duration must be >= min duration'
-          : selectedDays.length === 0
-            ? 'Select at least one day'
-            : '',
+      : duration < 15
+        ? 'Duration must be at least 15 minutes'
+        : selectedDays.length === 0
+          ? 'Select at least one day'
+          : '',
   );
 
   let isValid = $derived(!validationError);
 
   const colors = [
-    '#5BAD8A',
     '#5B8DB8',
+    '#5BAD8A',
     '#8B7CB8',
     '#C4985A',
     '#C4645A',
@@ -140,33 +103,33 @@
   ];
 
   $effect(() => {
-    if (open && habit) {
-      name = habit.name;
-      durationMin = habit.durationMin;
-      durationMax = habit.durationMax;
-      windowStart = habit.windowStart;
-      windowEnd = habit.windowEnd;
-      idealTime = habit.idealTime;
-      selectedDays = habit.days || ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-      schedulingHours = habit.schedulingHours;
-      priority = habit.priority;
-      color = habit.color || '#5BAD8A';
-    } else if (open && !habit) {
+    if (open && meeting) {
+      name = meeting.name;
+      duration = meeting.duration;
+      windowStart = meeting.windowStart || '09:00';
+      windowEnd = meeting.windowEnd || '17:00';
+      idealTime = meeting.idealTime || '10:00';
+      frequency = meeting.frequency;
+      selectedDays = meeting.frequencyConfig?.days || ['mon', 'tue', 'wed', 'thu', 'fri'];
+      priority = meeting.priority;
+      conferenceType = (meeting.conferenceType || 'none') as ConferenceType;
+      location = meeting.location || '';
+      attendees = meeting.attendees.join(', ');
+      color = meeting.color || '#5B8DB8';
+    } else if (open && !meeting) {
       name = '';
-      durationMin = 30;
-      durationMax = 30;
+      duration = 30;
       windowStart = '09:00';
       windowEnd = '17:00';
-      idealTime = '09:00';
-      selectedDays = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-      schedulingHours = SchedulingHours.Working;
+      idealTime = '10:00';
+      frequency = Frequency.Weekly;
+      selectedDays = ['mon', 'tue', 'wed', 'thu', 'fri'];
       priority = Priority.Medium;
-      color = '#5BAD8A';
+      conferenceType = 'none' as ConferenceType;
+      location = '';
+      attendees = '';
+      color = '#5B8DB8';
     }
-  });
-
-  onMount(() => {
-    tmpl.load();
   });
 
   async function handleSubmit(e: SubmitEvent) {
@@ -175,31 +138,40 @@
 
     saving = true;
     try {
+      const actualFrequency = frequency;
+
+      const parsedAttendees = attendees
+        .split(/[,;\s]+/)
+        .map((a) => a.trim())
+        .filter((a) => a.includes('@'));
+
       const data = {
         name: name.trim(),
-        durationMin,
-        durationMax,
+        duration,
+        frequency: actualFrequency,
+        frequencyConfig: { days: [...selectedDays] },
+        idealTime,
         windowStart,
         windowEnd,
-        idealTime,
-        days: [...selectedDays] as DayOfWeek[],
-        schedulingHours,
         priority,
+        conferenceType,
+        location: location.trim(),
+        attendees: parsedAttendees,
         color,
       };
 
-      if (isEdit && habit) {
-        await habits.update(habit.id, data);
-        showToast('Habit updated', 'success');
+      if (isEdit && meeting) {
+        await meetings.update(meeting.id, data);
+        showToast('Meeting updated', 'success');
       } else {
-        await habits.create(data);
-        showToast('Habit created', 'success');
+        await meetings.create(data);
+        showToast('Meeting created', 'success');
       }
       onsaved?.();
       onclose();
     } catch (err) {
       if (err instanceof Error && !('handled' in err)) {
-        showToast('Failed to save habit', 'error');
+        showToast('Failed to save meeting', 'error');
       }
     } finally {
       saving = false;
@@ -212,9 +184,6 @@
     class="modal-overlay"
     role="presentation"
     onclick={onclose}
-    onkeydown={(e) => {
-      if (e.key === 'Escape') onclose();
-    }}
     transition:fade={{ duration: 120 }}
   >
     <div
@@ -223,10 +192,13 @@
       aria-modal="true"
       tabindex="-1"
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => {
+        if (e.key === 'Escape') onclose();
+      }}
       transition:fly={{ y: 12, duration: 180 }}
     >
       <div class="modal-header">
-        <h2 class="modal-title">{isEdit ? 'Edit habit' : 'New habit'}</h2>
+        <h2 class="modal-title">{isEdit ? 'Edit meeting' : 'New meeting'}</h2>
         <button class="modal-close" onclick={onclose} aria-label="Close">
           <X size={16} />
         </button>
@@ -234,62 +206,43 @@
 
       <form class="modal-body" onsubmit={handleSubmit}>
         <div class="form-field">
-          <label class="form-label" for="habit-name">Name</label>
+          <label class="form-label" for="meeting-name">Name</label>
           <input
-            id="habit-name"
+            id="meeting-name"
             class="form-input"
             bind:value={name}
             required
-            placeholder="e.g., Morning exercise"
+            placeholder="e.g., Weekly standup"
           />
         </div>
 
-        <DurationSlider bind:value={durationMin} label="Min duration" min={5} max={360} />
-        <DurationSlider bind:value={durationMax} label="Max duration" min={5} max={360} />
+        <DurationSlider bind:value={duration} label="Duration" min={15} max={240} />
 
         <div class="form-field">
-          <label class="form-label" for="habit-schedule">Schedule during</label>
-          <select
-            id="habit-schedule"
-            class="form-select"
-            value={tmpl.getDropdownValue(schedulingHours)}
-            onchange={(e) =>
-              tmpl.handleDropdownChange((e.target as HTMLSelectElement).value, (hours) => {
-                schedulingHours = hours;
-              })}
-          >
-            <option value={SchedulingHours.Working}>Working hours</option>
-            <option value={SchedulingHours.Personal}>Personal hours</option>
-            <option value={SchedulingHours.Custom}>Custom</option>
-            {#if tmpl.state.templates.length > 0}
-              <optgroup label="Templates">
-                {#each tmpl.state.templates as t (t.id)}
-                  <option value="template:{t.id}">{t.name}</option>
-                {/each}
-              </optgroup>
-            {/if}
+          <label class="form-label" for="meeting-frequency">Frequency</label>
+          <select id="meeting-frequency" class="form-select" bind:value={frequency}>
+            <option value={Frequency.Daily}>Daily</option>
+            <option value={Frequency.Weekly}>Weekly</option>
+            <option value={Frequency.Monthly}>Monthly</option>
           </select>
         </div>
-
-        {#if schedulingHours === SchedulingHours.Custom}
-          <TimeRangeSlider bind:start={windowStart} bind:end={windowEnd} />
-        {/if}
-
-        <TimeSlider
-          bind:value={idealTime}
-          label="Ideal time"
-          min={idealMinMins}
-          max={idealMaxMins}
-        />
 
         <div class="form-field">
           <span class="form-label">Days</span>
           <DayPicker bind:selected={selectedDays} />
         </div>
 
+        <TimeRangeSlider bind:start={windowStart} bind:end={windowEnd} />
+        <TimeSlider
+          bind:value={idealTime}
+          label="Ideal time"
+          min={timeToMins(windowStart)}
+          max={windowEndToMins(windowEnd)}
+        />
+
         <div class="form-field">
-          <label class="form-label" for="habit-priority">Priority</label>
-          <select id="habit-priority" class="form-select" bind:value={priority}>
+          <label class="form-label" for="meeting-priority">Priority</label>
+          <select id="meeting-priority" class="form-select" bind:value={priority}>
             <option value={Priority.Critical}>Critical</option>
             <option value={Priority.High}>High</option>
             <option value={Priority.Medium}>Medium</option>
@@ -298,8 +251,39 @@
         </div>
 
         <div class="form-field">
-          <span class="form-label" id="habit-color-label">Color</span>
-          <div class="color-row" role="group" aria-labelledby="habit-color-label">
+          <label class="form-label" for="meeting-conference">Conference</label>
+          <select id="meeting-conference" class="form-select" bind:value={conferenceType}>
+            <option value="none">None</option>
+            <option value="google_meet">Google Meet</option>
+            <option value="zoom">Zoom</option>
+            <option value="teams">Microsoft Teams</option>
+          </select>
+        </div>
+
+        <div class="form-field">
+          <label class="form-label" for="meeting-location">Location</label>
+          <input
+            id="meeting-location"
+            class="form-input"
+            bind:value={location}
+            placeholder="Optional room or address"
+          />
+        </div>
+
+        <div class="form-field">
+          <label class="form-label" for="meeting-attendees">Attendees</label>
+          <input
+            id="meeting-attendees"
+            class="form-input"
+            bind:value={attendees}
+            placeholder="email@example.com, another@example.com"
+          />
+          <span class="form-hint">Comma-separated email addresses</span>
+        </div>
+
+        <div class="form-field">
+          <span class="form-label" id="meeting-color-label">Color</span>
+          <div class="color-row" role="group" aria-labelledby="meeting-color-label">
             {#each colors as c (c)}
               <button
                 type="button"
@@ -395,6 +379,12 @@
     font-size: 0.6875rem;
     color: var(--color-danger);
     margin-right: auto;
+  }
+
+  .form-hint {
+    font-size: 0.6875rem;
+    color: var(--color-text-tertiary);
+    margin-top: calc(-1 * var(--space-2));
   }
 
   .color-row {

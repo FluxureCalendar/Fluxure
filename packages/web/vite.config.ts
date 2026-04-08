@@ -85,9 +85,11 @@ export default defineConfig({
       'lucide-svelte/icons/house',
     ],
   },
+  css: {},
   build: {
     cssMinify: 'lightningcss',
     minify: 'esbuild',
+    // Intentionally lower than tsconfig's ES2022 — broader browser support for the runtime bundle
     target: 'es2020',
     rollupOptions: {
       output: {

@@ -19,7 +19,12 @@ type MessageHandler = (data: {
   changeCount?: number;
   data?: unknown;
 }) => void;
-export type ConnectionState = 'connected' | 'disconnected' | 'reconnecting' | 'capacity';
+export type ConnectionState =
+  | 'connected'
+  | 'disconnected'
+  | 'reconnecting'
+  | 'capacity'
+  | 'connecting';
 type ConnectionStateHandler = (state: ConnectionState) => void;
 
 let ws: WebSocket | null = null;
@@ -27,7 +32,7 @@ let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = WS_INITIAL_RECONNECT_DELAY_MS;
 const listeners = new Set<MessageHandler>();
 const connectionListeners = new Set<ConnectionStateHandler>();
-let currentState: ConnectionState = 'disconnected';
+let currentState: ConnectionState = 'connecting';
 
 // Reconnect when tab becomes visible after being hidden
 if (browser) {
@@ -61,6 +66,9 @@ function getWsUrl(): string {
 function connect(): void {
   if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return;
 
+  if (currentState !== 'reconnecting' && currentState !== 'capacity') {
+    setConnectionState('connecting');
+  }
   ws = new WebSocket(getWsUrl());
 
   ws.onopen = () => {

@@ -1,187 +1,186 @@
 <script lang="ts">
-  import type { SchedulingTemplate } from '$lib/api';
-  import Plus from 'lucide-svelte/icons/plus';
-  import Clock from 'lucide-svelte/icons/clock';
+  import { onMount } from 'svelte';
+  import { schedulingTemplates, type SchedulingTemplate } from '$lib/api';
+  import { getCachedTemplates, setCachedTemplates } from '$lib/cache.svelte';
+  import { showToast } from '$lib/toast.svelte';
+
   import Trash2 from 'lucide-svelte/icons/trash-2';
+  import TimeRangeSlider from '$lib/components/TimeRangeSlider.svelte';
 
-  interface Props {
-    templates: SchedulingTemplate[];
-    onaddtemplate: (name: string, startTime: string, endTime: string) => Promise<void>;
-    ondeletetemplate: (id: string) => void;
+  let templates = $state<SchedulingTemplate[]>([]);
+  let loading = $state(true);
+
+  let newName = $state('');
+  let newStart = $state('09:00');
+  let newEnd = $state('17:00');
+  let adding = $state(false);
+
+  async function loadTemplates() {
+    try {
+      const cached = getCachedTemplates();
+      if (cached) {
+        templates = cached;
+      } else {
+        const result = await schedulingTemplates.list();
+        templates = result.templates;
+        setCachedTemplates(result.templates);
+      }
+    } catch {
+      // silent
+    } finally {
+      loading = false;
+    }
   }
-
-  let { templates, onaddtemplate, ondeletetemplate }: Props = $props();
-
-  let newTemplateName = $state('');
-  let newTemplateStart = $state('09:00');
-  let newTemplateEnd = $state('17:00');
-  let templateError = $state('');
-  let addingTemplate = $state(false);
 
   async function addTemplate() {
-    templateError = '';
-    const name = newTemplateName.trim();
-    if (!name) {
-      templateError = 'Name is required.';
-      return;
-    }
-    if (name.length > 50) {
-      templateError = 'Name must be 50 characters or less.';
-      return;
-    }
-    if (newTemplateStart >= newTemplateEnd) {
-      templateError = 'Start time must be before end time.';
-      return;
-    }
-    if (templates.length >= 8) {
-      templateError = 'Maximum 8 templates allowed.';
-      return;
-    }
-    addingTemplate = true;
+    if (!newName.trim() || adding) return;
+    adding = true;
     try {
-      await onaddtemplate(name, newTemplateStart, newTemplateEnd);
-      newTemplateName = '';
-      newTemplateStart = '09:00';
-      newTemplateEnd = '17:00';
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to add template.';
-      templateError = msg.length > 200 ? msg.slice(0, 200) + '...' : msg;
+      const result = await schedulingTemplates.create({
+        name: newName.trim(),
+        startTime: newStart,
+        endTime: newEnd,
+      });
+      templates = [...templates, result.template];
+      setCachedTemplates(templates);
+      newName = '';
+      newStart = '09:00';
+      newEnd = '17:00';
+      showToast('Template created', 'success');
+    } catch (err) {
+      if (err instanceof Error && !('handled' in err)) {
+        showToast('Failed to create template', 'error');
+      }
     } finally {
-      addingTemplate = false;
+      adding = false;
     }
   }
+
+  async function deleteTemplate(id: string) {
+    try {
+      await schedulingTemplates.delete(id);
+      templates = templates.filter((t) => t.id !== id);
+      setCachedTemplates(templates);
+      showToast('Template deleted', 'success');
+    } catch (err) {
+      if (err instanceof Error && !('handled' in err)) {
+        showToast('Failed to delete template', 'error');
+      }
+    }
+  }
+
+  onMount(() => {
+    loadTemplates();
+  });
 </script>
 
-<section aria-labelledby="templates-heading" class="settings-section">
-  <div class="section-header-row">
-    <h2 id="templates-heading" class="section-heading">Scheduling Templates</h2>
-    <span class="template-count">{templates.length} / 8</span>
-  </div>
-  <p class="section-description">Define reusable time windows for habits, tasks, and focus time.</p>
+<section class="settings-section" data-setting-id="scheduling-templates">
+  <h3>Scheduling templates <span class="count">({templates.length}/8)</span></h3>
 
-  {#if templates.length === 0}
-    <p class="empty-message">No custom templates yet.</p>
+  {#if loading}
+    <p class="text-secondary">Loading...</p>
   {:else}
-    <div class="template-list">
-      {#each templates as template (template.id)}
-        <div class="template-item">
-          <div class="template-info">
-            <Clock size={14} />
-            <span class="template-name">{template.name}</span>
-            <span class="template-time font-mono">{template.startTime} – {template.endTime}</span>
+    {#if templates.length > 0}
+      <div class="template-list">
+        {#each templates as tmpl (tmpl.id)}
+          <div class="template-row">
+            <span class="template-name">{tmpl.name}</span>
+            <span class="template-time">{tmpl.startTime} - {tmpl.endTime}</span>
+            <button
+              class="icon-action icon-danger"
+              onclick={() => deleteTemplate(tmpl.id)}
+              aria-label="Delete {tmpl.name}"
+            >
+              <Trash2 size={14} />
+            </button>
           </div>
-          <button
-            class="btn-icon-danger"
-            onclick={() => ondeletetemplate(template.id)}
-            aria-label="Delete template {template.name}"
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
-      {/each}
-    </div>
-  {/if}
+        {/each}
+      </div>
+    {/if}
 
-  {#if templates.length < 8}
-    <div class="template-form">
-      <div class="form-field">
-        <input
-          type="text"
-          placeholder="Template name"
-          bind:value={newTemplateName}
-          maxlength={50}
-        />
+    {#if templates.length < 8}
+      <div class="add-template">
+        <div class="form-field">
+          <label class="form-label" for="tmpl-name">Name</label>
+          <input
+            id="tmpl-name"
+            class="form-input"
+            bind:value={newName}
+            placeholder="Evening routine"
+          />
+        </div>
+        <TimeRangeSlider bind:start={newStart} bind:end={newEnd} />
+        <button class="btn-secondary" onclick={addTemplate} disabled={adding || !newName.trim()}>
+          {adding ? 'Adding...' : 'Add template'}
+        </button>
       </div>
-      <div class="form-field">
-        <input type="time" bind:value={newTemplateStart} class="font-mono" />
-      </div>
-      <div class="form-field">
-        <input
-          type="time"
-          bind:value={newTemplateEnd}
-          class="font-mono"
-          aria-invalid={newTemplateStart >= newTemplateEnd ? true : undefined}
-        />
-      </div>
-      <button class="btn-sm btn-primary" onclick={addTemplate} disabled={addingTemplate}>
-        <Plus size={14} />
-        Add
-      </button>
-    </div>
-    {#if templateError}
-      <p class="validation-error">{templateError}</p>
     {/if}
   {/if}
 </section>
 
 <style lang="scss">
+  @use '$lib/styles/variables' as *;
   @use '$lib/styles/mixins' as *;
 
-  .section-header-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: var(--space-2);
+  .settings-section {
+    @include flex-col(var(--space-4));
   }
 
-  .section-description {
+  .count {
     font-size: 0.8125rem;
+    font-weight: 400;
+    color: var(--color-text-tertiary);
+    opacity: 0.6;
+  }
+
+  .text-secondary {
     color: var(--color-text-secondary);
-    margin: 0 0 var(--space-4) 0;
-  }
-
-  .template-count {
-    font-size: 0.75rem;
-    color: var(--color-text-tertiary);
-    font-weight: 500;
-  }
-
-  .empty-message {
-    font-size: 0.8125rem;
-    color: var(--color-text-tertiary);
-    margin: 0;
+    font-size: 0.875rem;
   }
 
   .template-list {
-    @include flex-col(var(--space-2));
-    margin-bottom: var(--space-4);
+    @include flex-col;
   }
 
-  .template-item {
-    @include flex-between;
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-  }
-
-  .template-info {
-    display: flex;
+  .template-row {
+    display: grid;
+    grid-template-columns: 1fr 120px 28px;
     align-items: center;
-    gap: var(--space-2);
-    color: var(--color-text-secondary);
-    font-size: 0.8125rem;
+    padding: var(--space-2) 0;
+    font-size: 0.875rem;
+
+    & + & {
+      border-top: 1px solid var(--color-border);
+    }
   }
 
   .template-name {
     color: var(--color-text);
-    font-weight: 500;
   }
 
   .template-time {
     color: var(--color-text-tertiary);
-    font-size: 0.75rem;
-  }
-
-  .template-form {
-    display: grid;
-    grid-template-columns: 1fr auto auto auto;
-    gap: var(--space-2);
-    align-items: end;
-  }
-
-  .validation-error {
     font-size: 0.8125rem;
-    color: var(--color-danger);
-    margin: var(--space-2) 0 0 0;
+  }
+
+  .icon-action {
+    @include icon-btn(24px);
+    opacity: 0.3;
+    transition: opacity var(--transition-fast);
+    &:hover {
+      opacity: 1;
+    }
+  }
+
+  .icon-danger {
+    &:hover {
+      color: var(--color-danger);
+      background: var(--color-danger-muted);
+    }
+  }
+
+  .add-template {
+    @include flex-col(var(--space-3));
+    padding-top: var(--space-3);
   }
 </style>
