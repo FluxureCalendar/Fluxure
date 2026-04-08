@@ -3,19 +3,25 @@
 </script>
 
 <svelte:head>
-  <title>Terms of Service - {APP_NAME}</title>
+  <title>Terms of Service — {APP_NAME}</title>
   <meta
     name="description"
     content="Terms of Service for {APP_NAME}, the intelligent calendar scheduling tool."
   />
+  <meta property="og:title" content="Terms of Service — Fluxure" />
+  <meta
+    property="og:description"
+    content="Terms of Service for Fluxure, the intelligent calendar scheduling tool."
+  />
+  <link rel="canonical" href="https://fluxure.app/terms" />
 </svelte:head>
 
 <div class="legal-page">
   <div class="legal-content">
     <div class="legal-nav">
       <a href="/">
-        <span class="brand-mark">{APP_NAME[0]}</span>
-        <span class="brand-name">{APP_NAME}</span>
+        <img src="/logo-mark.svg" alt="" width="24" height="24" />
+        <span class="legal-brand-name">fluxure</span>
       </a>
     </div>
 
@@ -219,7 +225,7 @@
 
     <div class="legal-footer">
       <a href="/">Back to home</a>
-      <span class="legal-footer-sep">|</span>
+      <span class="legal-sep">&middot;</span>
       <a href="/privacy">Privacy Policy</a>
     </div>
   </div>
@@ -233,11 +239,10 @@
     display: flex;
     justify-content: center;
     padding: var(--space-8) var(--space-4);
-    background: var(--color-bg);
   }
 
   .legal-content {
-    max-width: 720px;
+    max-width: 680px;
     width: 100%;
   }
 
@@ -253,28 +258,18 @@
     }
   }
 
-  .brand-mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    background: var(--color-accent);
-    color: var(--color-accent-text);
-    border-radius: var(--radius-md);
-    font-weight: 700;
-    font-size: 0.875rem;
-  }
-
-  .brand-name {
+  .legal-brand-name {
+    font-family: $font-heading;
     font-size: 1.125rem;
     font-weight: 600;
+    letter-spacing: -0.01em;
   }
 
   h1 {
+    font-family: $font-heading;
     font-size: 1.75rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
+    font-weight: 600;
+    letter-spacing: -0.015em;
     color: var(--color-text);
     margin: 0 0 var(--space-2);
   }
@@ -290,14 +285,15 @@
   }
 
   h2 {
-    font-size: 1rem;
+    font-family: $font-heading;
+    font-size: 1.0625rem;
     font-weight: 600;
     color: var(--color-text);
     margin: 0 0 var(--space-3);
   }
 
   p {
-    font-size: 0.875rem;
+    font-size: 0.9375rem;
     line-height: 1.7;
     color: var(--color-text-secondary);
     margin: 0 0 var(--space-3);
@@ -318,7 +314,7 @@
   }
 
   li {
-    font-size: 0.875rem;
+    font-size: 0.9375rem;
     line-height: 1.7;
     color: var(--color-text-secondary);
     margin-bottom: var(--space-1);
@@ -343,7 +339,7 @@
     }
   }
 
-  .legal-footer-sep {
+  .legal-sep {
     color: var(--color-text-tertiary);
     font-size: 0.8125rem;
   }

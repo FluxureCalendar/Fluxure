@@ -1,6 +1,6 @@
 {
   "name": "@fluxure/landing",
-  "version": "1.0.31",
+  "version": "1.0.32",
   "private": true,
   "description": "Marketing landing page for Fluxure — static SvelteKit site with pricing, privacy, and terms",
   "license": "AGPL-3.0-only",

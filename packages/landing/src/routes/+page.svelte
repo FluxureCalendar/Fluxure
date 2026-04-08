@@ -1,121 +1,31 @@
 <script lang="ts">
-  import Calendar from 'lucide-svelte/icons/calendar';
-  import RefreshCw from 'lucide-svelte/icons/refresh-cw';
-  import Repeat from 'lucide-svelte/icons/repeat';
-  import Layers from 'lucide-svelte/icons/layers';
-  import Shield from 'lucide-svelte/icons/shield';
-  import Link from 'lucide-svelte/icons/link';
-  import BarChart from 'lucide-svelte/icons/bar-chart-3';
-  import Smartphone from 'lucide-svelte/icons/smartphone';
-  import Plug from 'lucide-svelte/icons/plug';
-  import ListChecks from 'lucide-svelte/icons/list-checks';
-  import Sparkles from 'lucide-svelte/icons/sparkles';
-  import Check from 'lucide-svelte/icons/check';
   import ChevronDown from 'lucide-svelte/icons/chevron-down';
-  import Github from 'lucide-svelte/icons/github';
-  import ArrowRight from 'lucide-svelte/icons/arrow-right';
-  import type { Action } from 'svelte/action';
+  import { reveal } from '$lib/reveal';
   import { APP_URL, GITHUB_URL } from '$lib/config';
-
-  // Scroll-reveal Svelte action
-  const reveal: Action<HTMLElement, { delay?: number; threshold?: number } | undefined> = (
-    node,
-    options,
-  ) => {
-    const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReduced) {
-      node.classList.add('revealed');
-      return {};
-    }
-
-    const delay = options?.delay ?? 0;
-    const threshold = options?.threshold ?? 0.15;
-
-    node.style.transitionDelay = delay ? `${delay}ms` : '';
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            node.classList.add('revealed');
-            observer.unobserve(node);
-          }
-        }
-      },
-      { threshold },
-    );
-
-    observer.observe(node);
-
-    return {
-      destroy() {
-        observer.disconnect();
-      },
-    };
-  };
 
   const features = [
     {
-      icon: Calendar,
-      title: 'Auto-Scheduling',
-      desc: 'AI places habits, tasks, and focus time in optimal slots based on your preferences and availability.',
+      title: 'Intelligent scheduling',
+      desc: 'Finds optimal time slots for habits, tasks, and focus blocks. Respects your preferences and energy.',
     },
     {
-      icon: RefreshCw,
-      title: 'Google Calendar Sync',
-      desc: 'Real-time bidirectional sync with automatic conflict detection and resolution.',
+      title: 'Real-time sync',
+      desc: 'Bidirectional Google Calendar sync. Your schedule stays current as things change.',
     },
     {
-      icon: Repeat,
-      title: 'Smart Habits',
-      desc: 'Recurring habits with flexible frequency, ideal time preferences, and automatic rescheduling.',
+      title: 'Focus protection',
+      desc: 'Deep work blocks that guard your concentration. Schedules around them, not through them.',
     },
     {
-      icon: Layers,
-      title: 'Task Chunking',
-      desc: 'Large tasks automatically split into manageable work sessions across your week.',
-    },
-    {
-      icon: Shield,
-      title: 'Focus Time Protection',
-      desc: 'Dedicated deep work blocks that guard your concentration from meeting creep.',
-    },
-    {
-      icon: Link,
-      title: 'Scheduling Links',
-      desc: 'Share your availability like Calendly, built right into your scheduling workflow.',
-    },
-    {
-      icon: BarChart,
-      title: 'Schedule Quality Score',
-      desc: 'Daily health metrics for your calendar so you know how well-balanced your time is.',
-    },
-    {
-      icon: Smartphone,
-      title: 'Works Everywhere',
-      desc: 'Progressive web app that works on any device. Install directly from your browser.',
+      title: 'Open source',
+      desc: 'Self-hostable with Docker. Full control over your data, no vendor lock-in.',
     },
   ];
 
   const steps = [
-    {
-      num: '01',
-      title: 'Connect',
-      desc: 'Link your Google Calendar in one click with secure OAuth.',
-      icon: Plug,
-    },
-    {
-      num: '02',
-      title: 'Define',
-      desc: 'Add your habits, tasks, and time preferences.',
-      icon: ListChecks,
-    },
-    {
-      num: '03',
-      title: 'Relax',
-      desc: 'Fluxure handles the rest. Your calendar stays optimized.',
-      icon: Sparkles,
-    },
+    { n: '1', title: 'Connect', desc: 'Link Google Calendar with one click.' },
+    { n: '2', title: 'Define', desc: 'Add habits, tasks, and preferences.' },
+    { n: '3', title: 'Flow', desc: 'Your schedule optimizes itself.' },
   ];
 
   const plans = [
@@ -123,908 +33,440 @@
       name: 'Self-Hosted',
       price: 'Free',
       period: 'forever',
-      desc: 'Full control, your infrastructure.',
+      desc: 'Your infrastructure, full control.',
       features: [
         'Unlimited habits & tasks',
         'Google Calendar sync',
         'All scheduling features',
+        'Focus time protection',
         'Community support',
-        'Open source',
       ],
-      cta: 'Deploy Now',
+      cta: 'View on GitHub',
       href: GITHUB_URL,
-      highlighted: false,
+      recommended: false,
     },
     {
-      name: 'Pro',
-      price: '$8',
+      name: 'Cloud Free',
+      price: '$0',
       period: '/mo',
-      desc: 'Managed hosting, zero maintenance.',
+      desc: 'Zero setup, get started now.',
       features: [
-        'Everything in Self-Hosted',
-        'Managed cloud hosting',
+        'Up to 3 habits',
+        'Up to 5 tasks',
+        'Google Calendar sync',
+        'Basic scheduling',
+        'Email support',
+      ],
+      cta: 'Get started free',
+      href: `${APP_URL}/signup`,
+      recommended: false,
+    },
+    {
+      name: 'Cloud Pro',
+      price: '$9',
+      period: '/mo',
+      desc: 'Unlimited everything, managed.',
+      features: [
+        'Unlimited habits & tasks',
+        'Priority scheduling',
+        'Advanced analytics',
         'Automatic backups',
         'Priority support',
-        'Advanced analytics',
       ],
-      cta: 'Start Free Trial',
+      cta: 'Start free trial',
       href: `${APP_URL}/signup`,
-      highlighted: true,
-    },
-    {
-      name: 'Team',
-      price: '$15',
-      period: '/user/mo',
-      desc: 'Scheduling for your whole team.',
-      features: [
-        'Everything in Pro',
-        'Team calendars',
-        'Shared scheduling',
-        'Admin dashboard',
-        'SSO & SAML',
-      ],
-      cta: 'Contact Us',
-      href: `${APP_URL}/signup`,
-      highlighted: false,
+      recommended: true,
     },
   ];
 
   const faqs = [
     {
       q: 'What is Fluxure?',
-      a: 'Fluxure is a calendar scheduling tool that automatically places your habits, tasks, and focus time around your existing events. Think of it as an intelligent calendar assistant that ensures everything gets scheduled without conflicts.',
+      a: 'A calendar tool that automatically places habits, tasks, and focus time around your existing events. A calm, intelligent scheduling assistant.',
     },
     {
-      q: 'How does auto-scheduling work?',
-      a: 'Fluxure uses a greedy scheduling algorithm that scores candidate time slots based on your preferences, existing events, and priority levels. It continuously optimizes your schedule as things change throughout the day.',
+      q: 'How does scheduling work?',
+      a: 'Fluxure scores time slots based on your preferences, existing events, and priorities. It optimizes continuously as things change.',
     },
     {
       q: 'Is my data private?',
-      a: 'Absolutely. When self-hosted, your data never leaves your server. Calendar tokens are encrypted with AES-256-GCM, and all communication happens over HTTPS. We have no access to your calendar data.',
+      a: 'Self-hosted: your data never leaves your server. Cloud: tokens encrypted with AES-256-GCM, all communication over HTTPS.',
     },
     {
-      q: 'Can I self-host Fluxure?',
-      a: 'Yes. Fluxure is fully open source and designed for self-hosting. Deploy with Docker in minutes. You get all features for free, forever, with no restrictions.',
-    },
-    {
-      q: 'How does it compare to Reclaim.ai or Motion?',
-      a: 'Fluxure is open source and self-hostable, so you own your data. It focuses on the core scheduling experience without vendor lock-in. The self-hosted version is free with no feature gates.',
+      q: 'Can I self-host?',
+      a: 'Yes. Fully open source, deploy with Docker in minutes. All features, free, forever.',
     },
     {
       q: 'What calendars are supported?',
-      a: 'Currently, Fluxure supports Google Calendar with full bidirectional sync. Support for Microsoft Outlook and CalDAV is on the roadmap.',
+      a: 'Google Calendar with full bidirectional sync. Outlook and CalDAV are on the roadmap.',
     },
   ];
 
   let openFaq = $state(-1);
 
-  function toggleFaq(index: number) {
-    openFaq = openFaq === index ? -1 : index;
+  function toggleFaq(i: number) {
+    openFaq = openFaq === i ? -1 : i;
   }
 </script>
 
-<!-- Hero -->
 <section class="hero">
-  <div class="hero-glow"></div>
-  <div class="container hero-content">
-    <h1 class="hero-entrance hero-entrance-1">Your calendar, intelligently managed</h1>
-    <p class="hero-sub hero-entrance hero-entrance-2">
-      Fluxure automatically schedules your habits, tasks, and focus time around your existing
-      calendar. Stop manually juggling — let AI find the perfect slots.
+  <svg class="ripple" viewBox="0 0 400 400" aria-hidden="true">
+    <circle cx="200" cy="200" r="160" />
+    <circle cx="200" cy="200" r="160" style="animation-delay: 1.5s" />
+    <circle cx="200" cy="200" r="160" style="animation-delay: 3s" />
+    <circle cx="200" cy="200" r="160" style="animation-delay: 4.5s" />
+  </svg>
+  <div class="hero-content">
+    <p class="hero-tag">Calendar scheduling, simplified</p>
+    <h1 class="hero-heading">Your time, flowing naturally</h1>
+    <p class="hero-sub">
+      Fluxure schedules habits, tasks, and focus time around your existing events. No juggling. Just
+      rhythm.
     </p>
-    <div class="hero-actions hero-entrance hero-entrance-3">
-      <a class="btn btn-primary btn-lg" href="{APP_URL}/signup">
-        Get Started Free
-        <ArrowRight size={18} />
-      </a>
-      <a class="btn btn-outline btn-lg" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
-        <Github size={18} />
-        View on GitHub
-      </a>
-    </div>
-    <p class="hero-trust hero-entrance hero-entrance-4">
-      Free forever for self-hosted &middot; No credit card required
-    </p>
+    <a class="btn-primary" href="{APP_URL}/signup">Start for free</a>
   </div>
 </section>
 
-<!-- Features -->
-<section class="section" id="features">
-  <div class="container">
-    <div class="section-header reveal" use:reveal>
-      <h2>Everything you need to own your time</h2>
-      <p>Powerful scheduling features that work together seamlessly.</p>
-    </div>
-    <div class="features-grid">
-      {#each features as feature, i (feature.title)}
-        <div class="feature-card reveal" use:reveal={{ delay: i * 75 }}>
-          <div class="feature-icon">
-            <feature.icon size={22} />
-          </div>
-          <h3>{feature.title}</h3>
-          <p>{feature.desc}</p>
-        </div>
-      {/each}
-    </div>
+<section class="section" id="features" use:reveal>
+  <h2 class="section-heading">What it does</h2>
+  <div class="features">
+    {#each features as f, i (f.title)}
+      <div class="feature" use:reveal={{ delay: i * 80 }}>
+        <h3>{f.title}</h3>
+        <p>{f.desc}</p>
+      </div>
+    {/each}
   </div>
 </section>
 
-<!-- How It Works -->
-<section class="section section-alt" id="how-it-works">
-  <div class="container">
-    <div class="section-header reveal" use:reveal>
-      <h2>Up and running in minutes</h2>
-      <p>Three steps to a smarter calendar.</p>
-    </div>
-    <div class="steps-grid">
-      {#each steps as step, i (step.num)}
-        <div class="step-card reveal" use:reveal={{ delay: i * 150 }}>
-          <span class="step-num">{step.num}</span>
-          <div class="step-icon">
-            <step.icon size={24} />
-          </div>
-          <h3>{step.title}</h3>
-          <p>{step.desc}</p>
-        </div>
-      {/each}
-    </div>
+<section class="section" use:reveal>
+  <h2 class="section-heading">How it works</h2>
+  <div class="steps">
+    {#each steps as s (s.n)}
+      <div class="step" use:reveal={{ delay: Number(s.n) * 80 }}>
+        <span class="step-n">{s.n}</span>
+        <h3>{s.title}</h3>
+        <p>{s.desc}</p>
+      </div>
+    {/each}
   </div>
 </section>
 
-<!-- Pricing -->
-<section class="section" id="pricing">
-  <div class="container">
-    <div class="section-header reveal" use:reveal>
-      <h2>Simple, transparent pricing</h2>
-      <p>Start free. Scale when you're ready.</p>
-    </div>
-    <div class="pricing-grid">
-      {#each plans as plan, i (plan.name)}
-        <div
-          class="pricing-card reveal-scale"
-          class:highlighted={plan.highlighted}
-          use:reveal={{ delay: i * 100 }}
+<section class="section" id="pricing" use:reveal>
+  <h2 class="section-heading">Pricing</h2>
+  <div class="plans">
+    {#each plans as plan (plan.name)}
+      <div class="plan" class:plan--rec={plan.recommended} use:reveal={{ delay: 80 }}>
+        {#if plan.recommended}<span class="plan-badge">Recommended</span>{/if}
+        <span class="plan-name">{plan.name}</span>
+        <div class="plan-price">{plan.price}<span>{plan.period}</span></div>
+        <p class="plan-desc">{plan.desc}</p>
+        <ul class="plan-list">
+          {#each plan.features as feat (feat)}<li>{feat}</li>{/each}
+        </ul>
+        <a
+          class="plan-cta"
+          class:plan-cta--fill={plan.recommended}
+          href={plan.href}
+          target={plan.href.startsWith('http') ? '_blank' : undefined}
+          rel={plan.href.startsWith('http') ? 'noopener noreferrer' : undefined}>{plan.cta}</a
         >
-          {#if plan.highlighted}
-            <span class="pricing-badge">Recommended</span>
-          {/if}
-          <h3>{plan.name}</h3>
-          <div class="pricing-price">
-            <span class="price-amount">{plan.price}</span>
-            <span class="price-period">{plan.period}</span>
-          </div>
-          <p class="pricing-desc">{plan.desc}</p>
-          <ul class="pricing-features">
-            {#each plan.features as feat (feat)}
-              <li><Check size={16} /> {feat}</li>
-            {/each}
-          </ul>
-          <a
-            class="btn {plan.highlighted ? 'btn-primary' : 'btn-outline'} btn-lg btn-full"
-            href={plan.href}
-            target={plan.href.startsWith('http') ? '_blank' : undefined}
-            rel={plan.href.startsWith('http') ? 'noopener noreferrer' : undefined}
-          >
-            {plan.cta}
-          </a>
-        </div>
-      {/each}
-    </div>
+      </div>
+    {/each}
   </div>
 </section>
 
-<!-- FAQ -->
-<section class="section section-alt" id="faq">
-  <div class="container container-narrow">
-    <div class="section-header reveal" use:reveal>
-      <h2>Frequently asked questions</h2>
-      <p>Everything you need to know about Fluxure.</p>
-    </div>
-    <div class="faq-list">
-      {#each faqs as faq, i (faq.q)}
-        <div class="faq-item reveal" class:open={openFaq === i} use:reveal={{ delay: i * 60 }}>
-          <button class="faq-trigger" onclick={() => toggleFaq(i)} aria-expanded={openFaq === i}>
-            <span>{faq.q}</span>
-            <ChevronDown size={18} />
-          </button>
-          <div class="faq-answer">
-            <p>{faq.a}</p>
-          </div>
+<section class="section" id="faq" use:reveal>
+  <h2 class="section-heading">Questions</h2>
+  <div class="faq">
+    {#each faqs as faq, i (faq.q)}
+      <button class="faq-row" onclick={() => toggleFaq(i)} aria-expanded={openFaq === i}>
+        <div class="faq-q">
+          <span>{faq.q}</span>
+          <ChevronDown size={16} class="faq-icon {openFaq === i ? 'open' : ''}" />
         </div>
-      {/each}
-    </div>
+        {#if openFaq === i}
+          <p class="faq-a">{faq.a}</p>
+        {/if}
+      </button>
+    {/each}
   </div>
 </section>
 
-<!-- CTA Banner -->
-<section class="cta-banner">
-  <div class="container reveal" use:reveal>
-    <h2>Ready to take control of your time?</h2>
-    <p>Join developers and professionals who trust Fluxure to manage their calendars.</p>
-    <a class="btn btn-primary btn-lg cta-btn" href="{APP_URL}/signup">
-      Get Started Free
-      <ArrowRight size={18} />
-    </a>
-  </div>
+<section class="cta" use:reveal>
+  <h2 class="cta-heading">Find your flow</h2>
+  <a class="btn-primary" href="{APP_URL}/signup">Get started free</a>
 </section>
 
 <style lang="scss">
   @use '$lib/styles/mixins' as *;
 
-  // ---- Scroll Reveal Animations ----
-  .reveal {
-    opacity: 0;
-    transform: translateY(1.5rem);
-    transition:
-      opacity 0.6s var(--ease-out-expo),
-      transform 0.6s var(--ease-out-expo);
+  /* ---- Ripple ---- */
 
-    &:global(.revealed) {
-      opacity: 1;
-      transform: translateY(0);
+  .ripple {
+    position: absolute;
+    width: min(600px, 90vw);
+    aspect-ratio: 1;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+
+    circle {
+      fill: none;
+      stroke: var(--color-accent);
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+      transform-origin: 200px 200px;
+      animation: ripple 6s var(--ease-calm) infinite backwards;
     }
   }
 
-  .reveal-scale {
-    opacity: 0;
-    transform: scale(0.95) translateY(1rem);
-    transition:
-      opacity 0.5s var(--ease-out-expo),
-      transform 0.5s var(--ease-out-expo);
+  /* ---- Features ---- */
 
-    &:global(.revealed) {
-      opacity: 1;
-      transform: scale(1) translateY(0);
+  .features {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-12) var(--space-10);
+    margin-top: var(--space-10);
+
+    @include mobile {
+      grid-template-columns: 1fr;
+      gap: var(--space-8);
     }
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .reveal,
-    .reveal-scale {
-      opacity: 1;
-      transform: none;
-      transition: none;
-    }
-  }
-
-  // ---- Hero Entrance Animation ----
-  .hero-entrance {
-    opacity: 0;
-    transform: translateY(1.25rem);
-    animation: hero-enter 0.8s var(--ease-out-expo) forwards;
-  }
-
-  .hero-entrance-1 {
-    animation-delay: 0.1s;
-  }
-  .hero-entrance-2 {
-    animation-delay: 0.25s;
-  }
-  .hero-entrance-3 {
-    animation-delay: 0.4s;
-  }
-  .hero-entrance-4 {
-    animation-delay: 0.55s;
-  }
-
-  @keyframes hero-enter {
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .hero-entrance {
-      opacity: 1;
-      transform: none;
-      animation: none;
-    }
-  }
-
-  // ---- Shared ----
-  .container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 var(--space-6);
-  }
-
-  .container-narrow {
-    max-width: 800px;
-  }
-
-  .section {
-    padding: var(--space-24) 0;
-  }
-
-  .section-alt {
-    background: var(--color-surface);
-  }
-
-  .section-header {
-    text-align: center;
-    margin-bottom: var(--space-16);
-
-    h2 {
-      font-size: 2rem;
+  .feature {
+    h3 {
+      font-family: $font-heading;
+      font-size: 1.125rem;
       font-weight: 600;
-      letter-spacing: -0.02em;
-      margin: 0 0 var(--space-3);
+      color: var(--color-text);
+      margin-bottom: var(--space-2);
     }
 
     p {
+      font-size: 0.9375rem;
       color: var(--color-text-secondary);
-      font-size: 1.125rem;
-      margin: 0;
+      line-height: 1.65;
+      max-width: 320px;
     }
   }
 
-  // ---- Buttons ----
-  .btn {
-    display: inline-flex;
+  /* ---- Steps ---- */
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-10);
+    margin-top: var(--space-10);
+
+    @include mobile {
+      grid-template-columns: 1fr;
+      gap: var(--space-8);
+    }
+  }
+
+  .step {
+    .step-n {
+      display: block;
+      font-family: $font-heading;
+      font-size: 2rem;
+      font-weight: 300;
+      color: var(--color-accent);
+      line-height: 1;
+      margin-bottom: var(--space-3);
+    }
+
+    h3 {
+      font-family: $font-heading;
+      font-size: 1.125rem;
+      font-weight: 600;
+      color: var(--color-text);
+      margin-bottom: var(--space-1);
+    }
+
+    p {
+      font-size: 0.9375rem;
+      color: var(--color-text-secondary);
+      line-height: 1.6;
+    }
+  }
+
+  /* ---- Pricing ---- */
+
+  .plans {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-6);
+    margin-top: var(--space-10);
+
+    @include tablet {
+      grid-template-columns: 1fr;
+      max-width: 400px;
+    }
+  }
+
+  .plan {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-8) var(--space-6);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+
+    &--rec {
+      border-color: var(--color-accent);
+    }
+  }
+
+  .plan-badge {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--color-accent);
+  }
+
+  .plan-name {
+    font-family: $font-heading;
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .plan-price {
+    font-family: $font-heading;
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--color-text);
+    line-height: 1;
+
+    span {
+      font-size: 0.8125rem;
+      font-weight: 400;
+      color: var(--color-text-tertiary);
+    }
+  }
+
+  .plan-desc {
+    font-size: 0.875rem;
+    color: var(--color-text-secondary);
+  }
+
+  .plan-list {
+    list-style: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    flex: 1;
+
+    li {
+      font-size: 0.875rem;
+      color: var(--color-text-secondary);
+      padding-left: 20px;
+      position: relative;
+
+      &::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 5px;
+        width: 12px;
+        height: 12px;
+        background: var(--color-accent);
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='3'%3E%3Cpath d='M5 13l4 4L19 7'/%3E%3C/svg%3E")
+          center / contain no-repeat;
+      }
+    }
+  }
+
+  .plan-cta {
+    display: flex;
     align-items: center;
     justify-content: center;
-    gap: var(--space-2);
-    font-family: $font-sans;
+    margin-top: auto;
+    padding-top: var(--space-4);
+    height: 40px;
     font-size: 0.875rem;
     font-weight: 500;
-    text-decoration: none;
-    padding: var(--space-2) var(--space-4);
     border-radius: var(--radius-md);
-    border: 1px solid transparent;
+    text-decoration: none;
     cursor: pointer;
-    transition: all var(--transition-fast);
-    white-space: nowrap;
-  }
-
-  .btn-lg {
-    padding: var(--space-3) var(--space-6);
-    font-size: 0.9375rem;
-    border-radius: var(--radius-lg);
-  }
-
-  .btn-full {
-    width: 100%;
-  }
-
-  .btn-primary {
-    background: var(--color-accent);
-    color: var(--color-accent-text);
-
-    &:hover {
-      background: var(--color-accent-hover);
-      box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
-    }
-  }
-
-  .btn-outline {
-    background: transparent;
-    border-color: var(--color-border-strong);
+    transition:
+      background var(--transition-fast),
+      color var(--transition-fast);
     color: var(--color-text);
+    border: 1px solid var(--color-border);
+    background: transparent;
 
     &:hover {
       background: var(--color-surface-hover);
-      border-color: var(--color-text-tertiary);
-    }
-  }
-
-  // ---- Hero ----
-  .hero {
-    position: relative;
-    overflow: hidden;
-    padding: var(--space-24) 0 var(--space-20);
-    text-align: center;
-
-    @include mobile {
-      padding: var(--space-16) 0 var(--space-12);
-    }
-  }
-
-  .hero-glow {
-    position: absolute;
-    top: -40%;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 800px;
-    height: 600px;
-    background: radial-gradient(ellipse at center, var(--color-accent-muted) 0%, transparent 70%);
-    opacity: 0.6;
-    pointer-events: none;
-    will-change: transform, opacity;
-    animation: glow-pulse 6s ease-in-out infinite alternate;
-  }
-
-  @keyframes glow-pulse {
-    0% {
-      opacity: 0.4;
-      transform: translateX(-50%) scale(1);
-    }
-    50% {
-      opacity: 0.65;
-      transform: translateX(-50%) scale(1.05);
-    }
-    100% {
-      opacity: 0.7;
-      transform: translateX(-50%) scale(1.1);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .hero-glow {
-      animation: none;
-      opacity: 0.5;
-    }
-  }
-
-  .hero-content {
-    position: relative;
-
-    h1 {
-      font-size: 3.5rem;
-      font-weight: 700;
-      letter-spacing: -0.03em;
-      line-height: 1.1;
-      margin: 0 auto var(--space-6);
-      max-width: 720px;
-
-      @include tablet {
-        font-size: 2.75rem;
-      }
-
-      @include mobile {
-        font-size: 2.25rem;
-      }
-
-      @include small {
-        font-size: 1.875rem;
-      }
-    }
-  }
-
-  .hero-sub {
-    font-size: 1.25rem;
-    line-height: 1.6;
-    color: var(--color-text-secondary);
-    max-width: 600px;
-    margin: 0 auto var(--space-8);
-
-    @include mobile {
-      font-size: 1.0625rem;
-    }
-  }
-
-  .hero-actions {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-3);
-    flex-wrap: wrap;
-  }
-
-  .hero-trust {
-    margin: var(--space-6) 0 0;
-    font-size: 0.8125rem;
-    color: var(--color-text-tertiary);
-  }
-
-  // ---- Features ----
-  .features-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: var(--space-6);
-
-    @include tablet {
-      grid-template-columns: repeat(2, 1fr);
+      color: var(--color-text);
     }
 
-    @include small {
-      grid-template-columns: 1fr;
-    }
-  }
+    &--fill {
+      background: var(--color-accent);
+      color: var(--color-accent-text);
+      border-color: transparent;
 
-  .feature-card {
-    @include card;
-    padding: var(--space-6);
-    contain: content;
-    transition:
-      border-color var(--transition-base),
-      box-shadow var(--transition-base),
-      transform var(--transition-base),
-      opacity 0.6s var(--ease-out-expo);
-
-    @media (prefers-reduced-motion: no-preference) {
       &:hover {
-        border-color: var(--color-border-strong);
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-        transform: translateY(-2px);
-      }
-    }
-
-    h3 {
-      font-size: 0.9375rem;
-      font-weight: 600;
-      margin: var(--space-4) 0 var(--space-2);
-    }
-
-    p {
-      font-size: 0.875rem;
-      color: var(--color-text-secondary);
-      line-height: 1.6;
-      margin: 0;
-    }
-  }
-
-  .feature-icon {
-    width: 40px;
-    height: 40px;
-    @include flex-center;
-    background: var(--color-accent-muted);
-    color: var(--color-accent);
-    border-radius: var(--radius-lg);
-    transition: transform var(--transition-base);
-
-    .feature-card:hover & {
-      transform: scale(1.1);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .feature-icon {
-      transition: none;
-    }
-    .feature-card:hover .feature-icon {
-      transform: none;
-    }
-  }
-
-  // ---- Steps ----
-  .steps-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: var(--space-8);
-
-    @include mobile {
-      grid-template-columns: 1fr;
-      gap: var(--space-6);
-    }
-  }
-
-  .step-card {
-    text-align: center;
-    padding: var(--space-8) var(--space-6);
-
-    h3 {
-      font-size: 1.125rem;
-      font-weight: 600;
-      margin: var(--space-4) 0 var(--space-2);
-    }
-
-    p {
-      font-size: 0.875rem;
-      color: var(--color-text-secondary);
-      margin: 0;
-      line-height: 1.6;
-    }
-  }
-
-  .step-num {
-    font-family: $font-mono;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--color-accent);
-    letter-spacing: 0.05em;
-  }
-
-  .step-icon {
-    width: 56px;
-    height: 56px;
-    @include flex-center;
-    background: var(--color-accent-muted);
-    color: var(--color-accent);
-    border-radius: var(--radius-xl);
-    margin: var(--space-4) auto 0;
-  }
-
-  // ---- Pricing ----
-  .pricing-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: var(--space-6);
-    align-items: start;
-
-    @include tablet {
-      grid-template-columns: 1fr;
-      max-width: 480px;
-      margin: 0 auto;
-    }
-  }
-
-  .pricing-card {
-    @include card;
-    padding: var(--space-8);
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    overflow: visible;
-    transition:
-      transform var(--transition-base),
-      box-shadow var(--transition-base),
-      border-color var(--transition-base),
-      opacity 0.5s var(--ease-out-expo);
-
-    @media (prefers-reduced-motion: no-preference) {
-      &:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
-      }
-    }
-
-    &.highlighted {
-      border-color: var(--color-accent);
-      box-shadow:
-        0 0 0 1px var(--color-accent),
-        0 0 24px rgba(99, 102, 241, 0.12);
-    }
-
-    h3 {
-      font-size: 1.125rem;
-      font-weight: 600;
-      margin: 0 0 var(--space-4);
-    }
-  }
-
-  .pricing-badge {
-    position: absolute;
-    top: calc(-1 * var(--space-3));
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--color-accent);
-    color: var(--color-accent-text);
-    font-size: 0.75rem;
-    font-weight: 600;
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-full);
-    white-space: nowrap;
-    animation: badge-shimmer 3s ease-in-out infinite;
-  }
-
-  @keyframes badge-shimmer {
-    0%,
-    100% {
-      box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
-    }
-    50% {
-      box-shadow: 0 0 12px 2px rgba(99, 102, 241, 0.35);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .pricing-badge {
-      animation: none;
-    }
-    .pricing-card:hover {
-      transform: none;
-    }
-  }
-
-  .pricing-price {
-    margin-bottom: var(--space-4);
-  }
-
-  .price-amount {
-    font-size: 2.5rem;
-    font-weight: 700;
-    letter-spacing: -0.03em;
-  }
-
-  .price-period {
-    font-size: 0.875rem;
-    color: var(--color-text-secondary);
-  }
-
-  .pricing-desc {
-    font-size: 0.875rem;
-    color: var(--color-text-secondary);
-    margin: 0 0 var(--space-6);
-  }
-
-  .pricing-features {
-    list-style: none;
-    padding: 0;
-    margin: 0 0 var(--space-8);
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-
-    li {
-      display: flex;
-      align-items: center;
-      gap: var(--space-2);
-      font-size: 0.875rem;
-      color: var(--color-text-secondary);
-
-      :global(svg) {
-        color: var(--color-success);
-        flex-shrink: 0;
+        background: var(--color-accent-hover);
+        color: var(--color-accent-text);
       }
     }
   }
 
-  // ---- FAQ ----
-  .faq-list {
+  /* ---- FAQ ---- */
+
+  .faq {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    margin-top: var(--space-8);
+    border-top: 1px solid var(--color-border);
   }
 
-  .faq-item {
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-    background: var(--color-bg);
-    transition:
-      background var(--transition-fast),
-      border-color var(--transition-fast);
-
-    &.open {
-      background: color-mix(in srgb, var(--color-bg) 97%, var(--color-accent));
-      border-color: var(--color-border-strong);
-    }
-
-    &.open .faq-trigger :global(svg) {
-      transform: rotate(180deg);
-    }
-
-    &.open .faq-answer {
-      grid-template-rows: 1fr;
-    }
-  }
-
-  .faq-trigger {
+  .faq-row {
+    display: block;
     width: 100%;
+    padding: var(--space-5) 0;
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--color-border);
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .faq-q {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: var(--space-4) var(--space-5);
-    background: none;
-    border: none;
-    font-family: $font-sans;
     font-size: 0.9375rem;
     font-weight: 500;
     color: var(--color-text);
-    cursor: pointer;
-    text-align: left;
-    gap: var(--space-4);
-    min-height: 44px;
+    transition: color var(--transition-fast);
 
-    :global(svg) {
-      color: var(--color-text-tertiary);
-      flex-shrink: 0;
-      transition: transform var(--transition-base);
-    }
-
-    &:hover {
+    .faq-row:hover & {
       color: var(--color-accent);
     }
   }
 
-  .faq-answer {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows var(--transition-slow) var(--ease-spring);
-
-    p {
-      overflow: hidden;
-      font-size: 0.875rem;
-      color: var(--color-text-secondary);
-      line-height: 1.7;
-      margin: 0;
-      padding: 0 var(--space-5) var(--space-4);
-    }
+  :global(.faq-icon) {
+    color: var(--color-text-tertiary);
+    transition: transform var(--transition-base);
+    flex-shrink: 0;
   }
 
-  // ---- CTA Banner ----
-  .cta-banner {
-    padding: var(--space-24) 0;
-    text-align: center;
-    position: relative;
-    overflow: hidden;
-
-    &::before {
-      content: '';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 600px;
-      height: 400px;
-      background: radial-gradient(ellipse at center, var(--color-accent-muted) 0%, transparent 70%);
-      opacity: 0.5;
-      pointer-events: none;
-      animation: cta-glow 5s ease-in-out infinite alternate;
-    }
-
-    .container {
-      position: relative;
-    }
-
-    h2 {
-      font-size: 2rem;
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      margin: 0 0 var(--space-3);
-
-      @include mobile {
-        font-size: 1.5rem;
-      }
-    }
-
-    p {
-      color: var(--color-text-secondary);
-      font-size: 1.0625rem;
-      margin: 0 0 var(--space-8);
-    }
+  :global(.faq-icon.open) {
+    transform: rotate(180deg);
   }
 
-  @keyframes cta-glow {
-    0% {
-      opacity: 0.3;
-      transform: translate(-50%, -50%) scale(1);
-    }
-    100% {
-      opacity: 0.6;
-      transform: translate(-50%, -50%) scale(1.15);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .cta-banner::before {
-      animation: none;
-      opacity: 0.4;
-    }
-  }
-
-  .cta-btn:hover {
-    box-shadow: 0 0 24px rgba(99, 102, 241, 0.35);
-  }
-
-  // ---- Dark mode shadow adjustments ----
-  @media (prefers-color-scheme: dark) {
-    .feature-card:hover {
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-    }
-
-    .pricing-card:hover {
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
-    }
-
-    .pricing-card.highlighted {
-      box-shadow:
-        0 0 0 1px var(--color-accent),
-        0 0 32px rgba(129, 140, 248, 0.15);
-    }
-
-    .btn-primary:hover {
-      box-shadow: 0 0 20px rgba(129, 140, 248, 0.35);
-    }
-
-    .cta-btn:hover {
-      box-shadow: 0 0 24px rgba(129, 140, 248, 0.4);
-    }
-
-    .pricing-badge {
-      animation-name: badge-shimmer-dark;
-    }
-
-    @keyframes badge-shimmer-dark {
-      0%,
-      100% {
-        box-shadow: 0 0 0 0 rgba(129, 140, 248, 0);
-      }
-      50% {
-        box-shadow: 0 0 14px 2px rgba(129, 140, 248, 0.4);
-      }
-    }
+  .faq-a {
+    margin-top: var(--space-3);
+    font-size: 0.9375rem;
+    color: var(--color-text-secondary);
+    line-height: 1.65;
+    max-width: 520px;
+    animation: calmEnter 200ms var(--ease-calm) both;
   }
 </style>

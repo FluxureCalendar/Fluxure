@@ -3,45 +3,58 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#6366F1" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#818CF8" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#F7F6F4" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script>
+      (function () {
+        var t = localStorage.getItem('theme');
+        if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', t);
+        var m = document.querySelector('meta[name="theme-color"]');
+        if (m) m.setAttribute('content', t === 'dark' ? '#121110' : '#F7F6F4');
+      })();
+    </script>
     <style>
-      /* Critical inline CSS — prevents FOUC / white flash */
+      /* Critical inline CSS — prevents FOUC */
       :root {
-        --color-bg: #fafafa;
+        --color-bg: #f7f6f4;
         --color-surface: #ffffff;
-        --color-text: #09090b;
-        --color-text-secondary: #71717a;
-        --color-text-tertiary: #a1a1aa;
-        --color-accent: #6366f1;
-        --color-border: #e4e4e7;
-        --font-sans:
-          'Geist Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', SFMono-Regular, monospace;
+        --color-text: #2c2a26;
+        --color-text-secondary: #6b7b82;
+        --color-text-tertiary: #9aa0a4;
+        --color-accent: #4a90a4;
+        --color-border: #d8d6d0;
       }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --color-bg: #0c0c0e;
-          --color-surface: #16161a;
-          --color-text: #fafafa;
-          --color-text-secondary: #a1a1aa;
-          --color-text-tertiary: #52525b;
-          --color-accent: #818cf8;
-          --color-border: #27272a;
-        }
+      :root[data-theme='dark'] {
+        --color-bg: #121110;
+        --color-surface: #1c1b19;
+        --color-text: #e8e6e3;
+        --color-text-secondary: #8fa0a8;
+        --color-text-tertiary: #5e686d;
+        --color-accent: #6bb5cc;
+        --color-border: #2e2d29;
       }
       body {
         margin: 0;
         background-color: var(--color-bg);
         color: var(--color-text);
-        font-family: var(--font-sans);
+        font-family:
+          'Inter',
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
       }
-      /* Font-display swap for CDN fonts */
       @font-face {
-        font-family: 'Geist Sans';
+        font-family: 'Fraunces';
         font-display: swap;
-        src: local('Geist Sans');
+        src: local('Fraunces');
+      }
+      @font-face {
+        font-family: 'Inter';
+        font-display: swap;
+        src: local('Inter');
       }
       @font-face {
         font-family: 'Geist Mono';
@@ -49,6 +62,11 @@
         src: local('Geist Mono');
       }
     </style>
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Fluxure" />
+    <meta name="twitter:card" content="summary" />
+    <link rel="preconnect" href="https://accounts.google.com" crossorigin />
+    <link rel="dns-prefetch" href="https://accounts.google.com" />
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
