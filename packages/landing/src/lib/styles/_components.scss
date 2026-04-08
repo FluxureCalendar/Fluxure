@@ -1,0 +1,331 @@
+@use 'mixins' as *;
+
+// ============================================
+//   Header
+// ============================================
+
+.header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: $z-sidebar;
+  height: 64px;
+  background: transparent;
+  transition:
+    background var(--transition-slow),
+    backdrop-filter var(--transition-slow);
+
+  &.scrolled {
+    background: var(--header-bg);
+    backdrop-filter: blur(16px);
+  }
+}
+
+.header-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  height: 100%;
+  padding: 0 var(--space-6);
+  @include flex-between;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  text-decoration: none;
+  color: var(--color-text);
+}
+
+.header-name {
+  font-family: $font-heading;
+  font-weight: 600;
+  font-size: 1.125rem;
+  letter-spacing: -0.01em;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.theme-toggle {
+  @include icon-btn(36px);
+  color: var(--color-text-tertiary);
+
+  &:hover {
+    color: var(--color-text);
+  }
+}
+
+.header-signin {
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: var(--color-text-tertiary);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+
+  &:hover {
+    color: var(--color-text);
+  }
+
+  @include mobile {
+    display: none;
+  }
+}
+
+.header-cta {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  height: 32px;
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  font-family: $font-body;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border: none;
+  border-radius: var(--radius-full);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+
+  &:hover {
+    background: var(--color-accent-hover);
+    color: var(--color-accent-text);
+  }
+}
+
+// ============================================
+//   Hero
+// ============================================
+
+.hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 64px var(--space-6) var(--space-16);
+  text-align: center;
+  overflow: hidden;
+  background: var(--hero-gradient);
+  background-size: 300% 300%;
+  animation: waterShift 30s var(--ease-drift) infinite;
+
+  @include mobile {
+    min-height: auto;
+    padding: calc(64px + var(--space-12)) var(--space-4) var(--space-16);
+  }
+}
+
+.hero-content {
+  max-width: 560px;
+  position: relative;
+  z-index: 1;
+  animation: calmEnter 800ms var(--ease-calm) both;
+  animation-delay: 150ms;
+}
+
+.hero-tag {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-accent);
+  letter-spacing: 0.03em;
+  margin-bottom: var(--space-6);
+}
+
+.hero-heading {
+  font-family: $font-heading;
+  font-size: 3.5rem;
+  font-weight: 400;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  color: var(--color-text);
+  margin-bottom: var(--space-6);
+
+  @include tablet {
+    font-size: 2.75rem;
+  }
+
+  @include mobile {
+    font-size: 2.25rem;
+  }
+
+  @include small {
+    font-size: 2rem;
+  }
+}
+
+.hero-sub {
+  font-size: 1.0625rem;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+  max-width: 420px;
+  margin: 0 auto var(--space-10);
+}
+
+// ============================================
+//   Buttons
+// ============================================
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-8);
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  font-family: $font-body;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  border: none;
+  border-radius: var(--radius-full);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+
+  &:hover {
+    background: var(--color-accent-hover);
+    color: var(--color-accent-text);
+  }
+}
+
+// ============================================
+//   Sections
+// ============================================
+
+.section {
+  padding: var(--space-24) var(--space-6);
+  max-width: 760px;
+  margin: 0 auto;
+
+  @include mobile {
+    padding: var(--space-16) var(--space-4);
+  }
+
+  @include small {
+    padding: var(--space-12) var(--space-4);
+  }
+}
+
+.section-heading {
+  font-family: $font-heading;
+  font-size: 1.5rem;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: var(--color-text);
+}
+
+// ============================================
+//   CTA
+// ============================================
+
+.cta {
+  text-align: center;
+  padding: var(--space-24) var(--space-6);
+
+  @include mobile {
+    padding: var(--space-16) var(--space-4);
+  }
+}
+
+.cta-heading {
+  font-family: $font-heading;
+  font-size: 1.75rem;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+  margin-bottom: var(--space-8);
+}
+
+// ============================================
+//   Footer
+// ============================================
+
+.footer {
+  padding: var(--space-16) var(--space-6) var(--space-12);
+  border-top: 1px solid var(--color-border);
+}
+
+.footer-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  @include flex-between;
+  align-items: flex-start;
+
+  @include mobile {
+    flex-direction: column;
+    gap: var(--space-8);
+  }
+}
+
+.footer-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.footer-name {
+  font-family: $font-heading;
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--color-text);
+}
+
+.footer-copy {
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+  margin-top: var(--space-2);
+}
+
+.footer-links {
+  display: flex;
+  gap: var(--space-12);
+
+  @include mobile {
+    gap: var(--space-8);
+  }
+}
+
+.footer-col {
+  @include flex-col(var(--space-3));
+}
+
+.footer-col-title {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: var(--space-1);
+}
+
+.footer-link {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+
+  &:hover {
+    color: var(--color-text);
+  }
+}
+
+// ============================================
+//   Reveal
+// ============================================
+
+.reveal {
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 700ms var(--ease-calm),
+    transform 700ms var(--ease-calm);
+
+  &.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
