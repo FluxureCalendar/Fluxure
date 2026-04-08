@@ -20,8 +20,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ['redis-server', '--requirepass', '${REDIS_PASSWORD:?REDIS_PASSWORD must be set}']
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD}', 'ping']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -43,7 +44,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://fluxure:${POSTGRES_PASSWORD}@postgres:5432/fluxure
       - DATABASE_SSL=false
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
       - NODE_ENV=${NODE_ENV:-production}
       - JWT_SECRET=${JWT_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
@@ -72,6 +73,8 @@ services:
       retries: 3
       start_period: 10s
     read_only: true
+    tmpfs:
+      - /tmp
     security_opt:
       - no-new-privileges:true
     mem_limit: 512m
