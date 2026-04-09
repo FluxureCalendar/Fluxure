@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke="#4A90A4" stroke-width="2.2" stroke-linecap="round">
+  <!-- Three flowing wave lines, stacked vertically, each slightly offset -->
+  <!-- Top wave -->
+  <path d="M4 10 C8 7, 12 7, 16 10 C20 13, 24 13, 28 10"/>
+  <!-- Middle wave (slightly larger amplitude) -->
+  <path d="M4 16 C8 13, 12 13, 16 16 C20 19, 24 19, 28 16"/>
+  <!-- Bottom wave -->
+  <path d="M4 22 C8 19, 12 19, 16 22 C20 25, 24 25, 28 22"/>
+</svg>
