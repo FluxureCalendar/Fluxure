@@ -49,6 +49,6 @@
     "@fluxure/shared": "workspace:*",
     "@fontsource/geist-mono": "^5.2.7",
     "@fontsource/geist-sans": "^5.2.5",
-    "lucide-svelte": "^0.577.0"
+    "lucide-svelte": "^1.0.1"
   }
 }
