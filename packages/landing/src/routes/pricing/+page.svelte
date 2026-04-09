@@ -238,7 +238,6 @@
     align-items: center;
     justify-content: center;
     margin-top: auto;
-    padding-top: var(--space-4);
     height: 40px;
     font-size: 0.875rem;
     font-weight: 500;
