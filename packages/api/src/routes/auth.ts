@@ -30,6 +30,7 @@ import {
   sendVerificationEmail,
   sendPasswordResetEmail,
   sendAccountDeletionEmail,
+  sendWelcomeEmail,
 } from '../auth/email.js';
 import { requireAuth, optionalAuth } from '../middleware/auth.js';
 import {
@@ -519,18 +520,23 @@ router.get(
       if (!verification) return null;
 
       await tx.delete(emailVerifications).where(eq(emailVerifications.userId, verification.userId));
-      await tx
+      const [updated] = await tx
         .update(users)
         .set({ emailVerified: true, updatedAt: new Date().toISOString() })
-        .where(eq(users.id, verification.userId));
+        .where(eq(users.id, verification.userId))
+        .returning({ email: users.email, name: users.name });
 
-      return verification;
+      return updated ?? null;
     });
 
     if (!result) {
       sendError(res, 400, 'Invalid or expired verification token');
       return;
     }
+
+    sendWelcomeEmail(result.email, result.name).catch((err) => {
+      log.error({ err }, 'Failed to send welcome email');
+    });
 
     res.json({ success: true, message: 'Email verified successfully' });
   }),
@@ -817,16 +823,17 @@ function getFrontendOrigin(): string {
  * (instead of silently creating one). This ensures new users must go
  * through the signup flow where GDPR consent is explicitly collected.
  */
-async function findOrCreateGoogleUser(
+export async function findOrCreateGoogleUser(
   googleId: string,
   email: string,
   name: string | null,
   avatarUrl: string | null,
   tokens: { refresh_token?: string | null },
   intent: string = 'login',
-): Promise<typeof users.$inferSelect | null> {
+): Promise<{ user: typeof users.$inferSelect; isNewAccount: boolean } | null> {
   // Wrap in a transaction to prevent race conditions on concurrent OAuth callbacks
   return await db.transaction(async (tx) => {
+    let isNewAccount = false;
     let [user] = await tx.select().from(users).where(eq(users.googleId, googleId));
 
     if (!user) {
@@ -852,6 +859,7 @@ async function findOrCreateGoogleUser(
       } else if (intent === 'signup') {
         // New account creation — only allowed via signup flow where GDPR
         // consent checkbox was checked before initiating OAuth.
+        isNewAccount = true;
         [user] = await tx
           .insert(users)
           .values({
@@ -887,7 +895,7 @@ async function findOrCreateGoogleUser(
 
     // Re-fetch user to get latest state
     [user] = await tx.select().from(users).where(eq(users.id, user.id));
-    return user;
+    return { user, isNewAccount };
   });
 }
 
@@ -956,7 +964,7 @@ router.get(
         return;
       }
 
-      const user = await findOrCreateGoogleUser(
+      const result = await findOrCreateGoogleUser(
         profile.id,
         profile.email.toLowerCase(),
         profile.name || null,
@@ -965,11 +973,13 @@ router.get(
         oauthIntent,
       );
 
-      if (!user) {
+      if (!result) {
         // Login intent but no existing account — redirect to signup
         res.redirect(`${frontendOrigin}/signup?error=no_account`);
         return;
       }
+
+      const { user, isNewAccount } = result;
 
       const { accessToken, refreshToken } = await createSession(
         user.id,
@@ -977,6 +987,12 @@ router.get(
         getClientIp(req),
       );
       setAuthCookies(res, accessToken, refreshToken);
+
+      if (isNewAccount) {
+        sendWelcomeEmail(user.email, user.name).catch((err) => {
+          log.error({ err }, 'Failed to send welcome email');
+        });
+      }
 
       // Only start scheduler after onboarding is complete — during onboarding
       // the user is still configuring calendars/hours, no point scheduling yet

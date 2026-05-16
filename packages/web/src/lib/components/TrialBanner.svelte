@@ -53,7 +53,7 @@
 
 {#if tone === 'red'}
   <div class="trial-banner red" role="status" aria-live="polite">
-    <span>Your Pro trial has ended — items beyond the Free plan are frozen.</span>
+    <span>Your Pro access has ended — items beyond the Free plan are paused.</span>
     <a href="/settings?billing=upgrade">Upgrade</a>
   </div>
 {:else if status && status.isTrial && status.trialDaysRemaining !== null && tone !== 'none' && !dismissed}

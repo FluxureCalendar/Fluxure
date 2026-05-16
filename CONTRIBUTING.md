@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-# Prerequisites: Node.js 22+, pnpm 9+, PostgreSQL 16+
+# Prerequisites: Node.js 22+, pnpm 9+, Docker (PostgreSQL 17 + Redis 7 via docker-compose.dev.yml)
 git clone https://github.com/FluxureCalendar/Fluxure.git && cd Fluxure
 pnpm install
 cp .env.example .env   # edit with your DB URL, JWT secrets, Google OAuth

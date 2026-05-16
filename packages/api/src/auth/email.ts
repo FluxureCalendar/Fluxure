@@ -316,3 +316,24 @@ export async function sendTrialEndedEmail(email: string, frozenCount: number): P
   });
   logDevEmail(info);
 }
+
+export async function sendWelcomeEmail(email: string, name: string | null): Promise<void> {
+  const firstName = name?.trim().split(/\s+/)[0];
+  const heading = firstName ? `Welcome, ${firstName}` : `Welcome to ${BRAND.name}`;
+
+  const info = await getTransporter().sendMail({
+    from: getFromAddress(),
+    to: email,
+    subject: `Welcome to ${BRAND.name}`,
+    html: buildEmailHtml({
+      heading,
+      bodyText: `Your ${BRAND.name} account is ready. ${BRAND.name} automatically places your habits, tasks, and focus time onto your calendar so you can spend less time planning and more time in flow.`,
+      ctaText: `Open ${BRAND.name}`,
+      ctaUrl: getAppUrl(),
+      footerText: `If you didn't create a ${BRAND.name} account, you can safely ignore this email.`,
+    }),
+    text: `${heading}\n\nYour ${BRAND.name} account is ready. ${BRAND.name} automatically places your habits, tasks, and focus time onto your calendar.\n\nOpen ${BRAND.name}: ${getAppUrl()}`,
+  });
+
+  logDevEmail(info);
+}

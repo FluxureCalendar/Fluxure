@@ -5,7 +5,7 @@ Express REST API server for Fluxure. Handles authentication, Google Calendar syn
 ## Stack
 
 - **Runtime:** Node.js + Express
-- **Database:** PostgreSQL 16 via Drizzle ORM
+- **Database:** PostgreSQL 17 via Drizzle ORM
 - **Validation:** Zod schemas on all inputs
 - **Auth:** JWT (access 15min + refresh 7d) in httpOnly cookies
 - **Logging:** Pino structured logging
@@ -14,17 +14,18 @@ Express REST API server for Fluxure. Handles authentication, Google Calendar syn
 
 ## Routes
 
-23 route modules under `src/routes/`:
+Route modules under `src/routes/` — one file per domain, plus shared internals (`helpers.ts`, `schedule-helpers.ts`):
 
 | Route                  | Description                                                                       |
 | ---------------------- | --------------------------------------------------------------------------------- |
 | `auth`                 | Signup, login, logout, refresh, verify email, forgot/reset password, Google OAuth |
 | `habits`               | CRUD for recurring habits                                                         |
 | `tasks`                | CRUD for one-off tasks with chunking support                                      |
-| `meetings`             | CRUD for smart meetings                                                           |
+| `meetings`             | CRUD for smart meetings (gated — not placed by the scheduler)                     |
 | `focus`                | Focus time rules                                                                  |
-| `buffers`              | Buffer configuration between events                                               |
+| `defaults`             | Default scheduling preferences                                                    |
 | `schedule`             | Trigger reschedule, get quality score, get changes                                |
+| `schedule-actions`     | Per-event actions (skip, lock, manual reschedule)                                 |
 | `settings`             | User preferences (working hours, timezone, etc.)                                  |
 | `calendars`            | Google Calendar list and sync management                                          |
 | `links`                | Scheduling links for public booking                                               |
@@ -36,12 +37,13 @@ Express REST API server for Fluxure. Handles authentication, Google Calendar syn
 | `webhooks`             | Google Calendar push notification receiver                                        |
 | `scheduling-templates` | Reusable time window presets                                                      |
 | `billing`              | Stripe subscription management                                                    |
+| `billing-webhook`      | Stripe webhook receiver (signature-verified)                                      |
 
 ## Key Modules
 
 - **`scheduler-registry.ts`** — Manages per-user `UserScheduler` instances. Lazy init, 30min idle cleanup, concurrency guard (one reschedule at a time per user).
 - **`google/`** — Calendar sync (incremental via sync tokens), push notifications with polling fallback, OAuth flow.
-- **`db/pg-schema.ts`** — Drizzle schema with 18 tables, all scoped by `userId` FK with `ON DELETE CASCADE`.
+- **`db/pg-schema.ts`** — Drizzle schema with 19 tables, all scoped by `userId` FK with `ON DELETE CASCADE`.
 - **`validation.ts`** — Zod schemas for every request body and query parameter.
 - **`middleware/auth.ts`** — `requireAuth` middleware extracts `userId`, `userEmail`, `userPlan` from JWT cookie.
 - **`ws.ts`** — Per-user WebSocket channels for `schedule_updated` and `schedule_changes` broadcasts.

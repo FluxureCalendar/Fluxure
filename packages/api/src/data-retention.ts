@@ -143,6 +143,8 @@ export async function cleanupCalendarEvents(): Promise<number> {
 
 async function runRetentionCleanup(): Promise<void> {
   try {
+    const trialWarningsSent = await sendTrialWarnings();
+
     const [
       activityDeleted,
       resetsDeleted,
@@ -152,7 +154,6 @@ async function runRetentionCleanup(): Promise<void> {
       webhookEventsDeleted,
       calendarEventsDeleted,
       habitCompletionsDeleted,
-      trialWarningsSent,
       trialsReverted,
     ] = await Promise.all([
       cleanupActivityLog(),
@@ -163,7 +164,6 @@ async function runRetentionCleanup(): Promise<void> {
       cleanupStripeWebhookEvents(),
       cleanupCalendarEvents(),
       cleanupOldHabitCompletions(),
-      sendTrialWarnings(),
       revertExpiredTrials(),
     ]);
 

@@ -18,7 +18,7 @@ Two deployment models:
 ### A1. VPS — API + Database
 
 ```bash
-git clone https://github.com/FluxureCalendar/fluxure.git /opt/fluxure
+git clone https://github.com/FluxureCalendar/Fluxure.git /opt/fluxure
 cd /opt/fluxure && cp .env.example .env
 # Edit .env: DATABASE_URL, JWT_SECRET, ENCRYPTION_KEY, Google OAuth, CORS_ORIGIN, SMTP
 docker compose up -d
@@ -60,21 +60,46 @@ Redirect URI: `https://api.fluxure.app/api/auth/google/callback`. Enable Google 
 
 ## Option B: Self-Hosted (All-in-One)
 
+A single `theflyingrat/fluxure:latest` container serves the web app, API, and WebSocket on port 3000, alongside PostgreSQL 17 and Redis 7.
+
 ```
-yourdomain.com ──► nginx (:80) ──► static files + /api/* → API (:3000) + /ws → WebSocket
+yourdomain.com ──► Caddy (:80/:443, auto-TLS) ──► fluxure:3000  ──► postgres + redis
 ```
 
+### B1. One-line installer (recommended)
+
+An interactive installer that checks prerequisites, provisions secrets, writes `docker-compose.yml` + `.env` (+ a `Caddyfile` if you supply a domain), pulls the image, and starts everything:
+
 ```bash
-git clone https://github.com/your-org/fluxure.git /opt/fluxure
-cd /opt/fluxure && cp .env.example .env
-# Edit .env: POSTGRES_PASSWORD, JWT_SECRET, ENCRYPTION_KEY, Google OAuth, CORS_ORIGIN=https://yourdomain.com
-chmod +x scripts/selfhost-build.sh && ./scripts/selfhost-build.sh
+curl -fsSL https://raw.githubusercontent.com/FluxureCalendar/Fluxure/main/scripts/install.sh | bash
+```
+
+It prompts for a domain (Caddy auto-provisions TLS and enables Google push notifications) or runs on `localhost:3000` with 15s polling. Then:
+
+```bash
+./install.sh --update      # backup DB, pull latest image, restart
+./install.sh --uninstall   # stop / remove containers / wipe data (menu)
+```
+
+Installs to `$HOME/fluxure` (override with `FLUXURE_DIR`).
+
+### B2. Manual Docker Compose
+
+Use the committed `docker-compose.selfhost.yml` (same image, no Caddy):
+
+```bash
+git clone https://github.com/FluxureCalendar/Fluxure.git /opt/fluxure
+cd /opt/fluxure
+# Create .env with at least:
+#   POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, ENCRYPTION_KEY,
+#   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI,
+#   CORS_ORIGIN, FRONTEND_URL    (SELF_HOSTED=true is set by the compose file)
 docker compose -f docker-compose.selfhost.yml up -d
 ```
 
 Custom port: `FLUXURE_PORT=8080 docker compose -f docker-compose.selfhost.yml up -d`
 
-For HTTPS, place Caddy or Cloudflare Tunnel in front.
+For HTTPS, place Caddy or a Cloudflare Tunnel in front of port 3000.
 
 ---
 

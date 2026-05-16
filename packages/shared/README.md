@@ -1,19 +1,22 @@
 # @fluxure/shared
 
-Shared types, enums, constants, and utilities used by all packages in the Fluxure monorepo. This package is the dependency root — `engine`, `api`, and `web` all import from it.
+Shared types, enums, constants, and utilities used by all packages in the Fluxure monorepo. This package is the dependency root — `engine`, `api`, `web`, and `landing` all import from it.
 
 ## Key Exports
 
 ### Enums
 
-| Enum                 | Values                                      |
-| -------------------- | ------------------------------------------- |
-| `Priority`           | 1 (Critical), 2 (High), 3 (Medium), 4 (Low) |
-| `ItemType`           | Habit, Task, Meeting, Focus                 |
-| `EventStatus`        | Free, Busy, Tentative                       |
-| `Frequency`          | Daily, Weekly, Biweekly, Monthly, Custom    |
-| `ScheduleChangeType` | Created, Moved, Resized, Deleted            |
-| `PlanType`           | SelfHosted, CloudFree, CloudPro, CloudTeam  |
+| Enum / Type          | Values                                                        |
+| -------------------- | ------------------------------------------------------------- |
+| `Priority`           | 1 (Critical), 2 (High), 3 (Medium), 4 (Low)                   |
+| `ItemType`           | Meeting, Habit, Task, Focus, External                         |
+| `EventStatus`        | Free, Busy, Locked, Completed                                 |
+| `TaskStatus`         | Open, DoneScheduling, Completed                               |
+| `Frequency`          | Daily, Weekly, Monthly, Custom                                |
+| `SchedulingHours`    | Working, Personal, Custom                                     |
+| `CalendarMode`       | Writable, Locked                                              |
+| `ScheduleChangeType` | Created, Moved, Resized, Deleted, Completed, Locked, Unlocked |
+| `PlanType`           | `'free' \| 'pro'` (string union, not an enum)                 |
 
 ### Constants
 
@@ -27,11 +30,15 @@ Shared types, enums, constants, and utilities used by all packages in the Fluxur
 ### Plan Limits
 
 ```typescript
-import { PlanLimits, getPlanLimits } from '@fluxure/shared';
+import { getPlanLimits, isUnlimited, type PlanType } from '@fluxure/shared';
 
-const limits = getPlanLimits(PlanType.CloudFree);
-// { maxHabits: 3, maxCalendars: 2, maxSchedulingLinks: 1, ... }
+const limits = getPlanLimits('free');
+// { maxHabits: 3, maxTasks: 5, maxCalendars: 1, maxSchedulingLinks: 1, ... }
+
+getPlanLimits('pro').maxHabits; // -1  →  isUnlimited(-1) === true
 ```
+
+Two tiers only: `free` and `pro`. `-1` means unlimited (check with `isUnlimited()`). Self-hosting is not a tier — the API's `SELF_HOSTED` env var grants Pro limits without Stripe. Meetings are gated (`meetingsEnabled: false`) on both tiers.
 
 ### Natural Language Parser
 

@@ -106,6 +106,7 @@ vi.mock('../auth/email.js', () => ({
   sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
   sendPasswordResetEmail: vi.fn().mockResolvedValue(undefined),
   sendAccountDeletionEmail: vi.fn().mockResolvedValue(undefined),
+  sendWelcomeEmail: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../google/index.js', () => ({
   createOAuth2Client: vi.fn(),
@@ -168,7 +169,7 @@ vi.mock('../logger.js', () => ({
 // Imports (after mocks)
 // ============================================================
 
-import authRouter from '../routes/auth.js';
+import authRouter, { findOrCreateGoogleUser } from '../routes/auth.js';
 import { hashPassword } from '../auth/password.js';
 import { signAccessToken, hashToken } from '../auth/jwt.js';
 import cookieParser from 'cookie-parser';
@@ -479,7 +480,7 @@ describe('Auth Routes', () => {
   // ----------------------------------------------------------
 
   describe('GET /api/auth/verify-email', () => {
-    it('verifies email with valid token', async () => {
+    it('verifies email with valid token and sends a welcome email', async () => {
       const verification = {
         id: 'v1',
         userId: TEST_USER_ID,
@@ -487,12 +488,16 @@ describe('Auth Routes', () => {
         expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       };
       mockDb._setWhereResults([[verification]]);
+      mockDb._mockReturning.mockResolvedValueOnce([{ email: TEST_EMAIL, name: 'Test User' }]);
+
+      const { sendWelcomeEmail } = await import('../auth/email.js');
 
       const res = await request(app).get('/api/auth/verify-email?token=valid-token');
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.message).toContain('verified');
+      expect(sendWelcomeEmail).toHaveBeenCalledWith(TEST_EMAIL, 'Test User');
     });
 
     it('returns 400 for expired or invalid token', async () => {
@@ -502,6 +507,17 @@ describe('Auth Routes', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('Invalid or expired');
+    });
+
+    it('does not send a welcome email for an invalid token', async () => {
+      mockDb._setWhereResults([[]]);
+
+      const { sendWelcomeEmail } = await import('../auth/email.js');
+
+      const res = await request(app).get('/api/auth/verify-email?token=bad-token');
+
+      expect(res.status).toBe(400);
+      expect(sendWelcomeEmail).not.toHaveBeenCalled();
     });
 
     it('returns 400 when token query parameter is missing', async () => {
@@ -994,6 +1010,76 @@ describe('Auth Routes', () => {
       const res = await request(app).get('/api/auth/google/status');
 
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe('findOrCreateGoogleUser', () => {
+    const tokens = { refresh_token: 'rt-123' };
+
+    it('returns isNewAccount: true for a brand-new signup', async () => {
+      const newUser = makeUserRow({ googleId: 'g-1', emailVerified: true });
+      mockDb._setWhereResults([[], [], [newUser]]);
+      mockDb._mockReturning.mockResolvedValueOnce([newUser]);
+
+      const result = await findOrCreateGoogleUser(
+        'g-1',
+        TEST_EMAIL,
+        'New Person',
+        null,
+        tokens,
+        'signup',
+      );
+
+      expect(result).not.toBeNull();
+      expect(result?.isNewAccount).toBe(true);
+      expect(result?.user.email).toBe(TEST_EMAIL);
+    });
+
+    it('returns isNewAccount: false when linking Google to an existing account', async () => {
+      const existing = makeUserRow({ googleId: null });
+      mockDb._setWhereResults([[], [existing], [existing]]);
+
+      const result = await findOrCreateGoogleUser(
+        'g-2',
+        TEST_EMAIL,
+        'Existing Person',
+        null,
+        tokens,
+        'signup',
+      );
+
+      expect(result?.isNewAccount).toBe(false);
+    });
+
+    it('returns isNewAccount: false for an existing Google user logging in', async () => {
+      const existing = makeUserRow({ googleId: 'g-3' });
+      mockDb._setWhereResults([[existing], [existing]]);
+
+      const result = await findOrCreateGoogleUser(
+        'g-3',
+        TEST_EMAIL,
+        'Existing Person',
+        null,
+        tokens,
+        'login',
+      );
+
+      expect(result?.isNewAccount).toBe(false);
+    });
+
+    it('returns null for login intent with no existing account', async () => {
+      mockDb._setWhereResults([[], []]);
+
+      const result = await findOrCreateGoogleUser(
+        'g-4',
+        'nobody@example.com',
+        null,
+        null,
+        tokens,
+        'login',
+      );
+
+      expect(result).toBeNull();
     });
   });
 });

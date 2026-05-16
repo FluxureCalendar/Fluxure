@@ -16,7 +16,7 @@ import { asyncHandler } from '../middleware/async-handler.js';
 import { z } from 'zod/v4';
 import { sendError } from './helpers.js';
 import { createLogger } from '../logger.js';
-import { getPlanLimits } from '@fluxure/shared';
+import { getPlanLimits, isUnlimited } from '@fluxure/shared';
 import { isTrialActive, getEffectivePlan, getTrialDaysRemaining } from '../billing/trial.js';
 import {
   getStripeSecretKey,
@@ -249,7 +249,7 @@ router.post(
 
     const effectivePlan = getEffectivePlan(user);
     const limit = getPlanLimits(effectivePlan)[ACTIVE_SET_TABLES[type].limitKey];
-    if (limit === -1) {
+    if (isUnlimited(limit)) {
       sendError(res, 400, 'All items are active on your plan');
       return;
     }

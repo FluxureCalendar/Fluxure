@@ -262,7 +262,7 @@ describe('TrialBanner', () => {
 
   // ─── Expired-trial (red) state ───────────────────────────────────────────────
 
-  it('renders red banner with "trial has ended" text and Upgrade link for expired trial', async () => {
+  it('renders red banner with "Pro access has ended" text and Upgrade link for expired trial', async () => {
     vi.mocked(billing.status).mockResolvedValue(
       makeBillingStatus({
         plan: 'free',
@@ -279,7 +279,9 @@ describe('TrialBanner', () => {
       const banner = container.querySelector('.trial-banner');
       expect(banner).not.toBeNull();
       expect(banner!.classList.contains('red')).toBe(true);
-      expect(banner!.textContent).toContain('trial has ended');
+      expect(banner!.textContent).toContain(
+        'Your Pro access has ended — items beyond the Free plan are paused.',
+      );
     });
 
     const link = screen.getByRole('link', { name: 'Upgrade' });

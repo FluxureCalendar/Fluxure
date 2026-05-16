@@ -11,7 +11,6 @@ Fluxure automatically places habits, tasks, meetings, and focus time on Google C
 
 - **Habits** — Recurring activities with flexible frequency and preferred time windows
 - **Tasks** — Deadline-driven work, auto-chunked into manageable blocks
-- **Meetings** — Smart scheduling with attendee management and conflict detection
 - **Focus Time** — Protected deep work blocks
 - **Public Booking** — Shareable scheduling links with availability detection
 - **Quick-Add** — Natural language parsing ("Gym MWF 7am 1h")
@@ -19,16 +18,19 @@ Fluxure automatically places habits, tasks, meetings, and focus time on Google C
 - **PWA** — Installable with offline caching and real-time sync
 - **Billing** — Free and Pro tiers with Stripe, 14-day trial
 
+> Meetings are modeled (types, API, DB) but currently **gated** — not placed by the scheduling engine. Scheduling-engine integration is planned, not shipped.
+
 ## Architecture
 
-pnpm monorepo with four packages:
+pnpm monorepo with five packages (dependency DAG: `shared` → `engine` → `api`, and `shared` → `web`/`landing`):
 
 ```
 packages/
-  shared/    Types, constants, NL parser
-  engine/    Pure scheduling algorithm
+  shared/    Types, constants, enums, NL parser, plan limits
+  engine/    Pure scheduling algorithm (no DB/auth/I/O)
   api/       Express + Drizzle ORM + PostgreSQL
   web/       SvelteKit (Svelte 5) PWA
+  landing/   SvelteKit static marketing site
 ```
 
 ## Quick Start
