@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mock tracking ────────────────────────────────────────────
-/** Each call to tx.update(table).set(payload).where(...) pushes here */
-const updateCalls: Array<{ set: Record<string, unknown> }> = [];
+/** Each call to tx.update(table).set(payload).where(pred) pushes here */
+const updateCalls: Array<{ set: Record<string, unknown>; where: unknown }> = [];
 
 /** Ordered queue of results for tx.select().from().where().orderBy() */
 const selectResults: unknown[][] = [];
@@ -16,10 +16,27 @@ vi.mock('../config.js', () => ({
 }));
 
 /**
+ * Mock drizzle-orm so that inArray returns an inspectable sentinel
+ * { __inArray: ids } while eq/and/asc/desc return simple tagged values.
+ * This lets us inspect exactly which ids were passed to each update's .where().
+ */
+vi.mock('drizzle-orm', async (importActual) => {
+  const actual = await importActual<typeof import('drizzle-orm')>();
+  return {
+    ...actual,
+    inArray: (_col: unknown, ids: string[]) => ({ __inArray: ids }),
+    eq: (_col: unknown, val: unknown) => ({ __eq: val }),
+    and: (...args: unknown[]) => ({ __and: args }),
+    asc: (col: unknown) => ({ __asc: col }),
+    desc: (col: unknown) => ({ __desc: col }),
+  };
+});
+
+/**
  * The new freeze.ts always operates inside db.transaction(tx => ...).
  * Every select in reconcileTable / reconcileCalendars resolves from
  * the selectResults queue via tx.select().from().where().orderBy().
- * Every update resolves and records { set } in updateCalls.
+ * Every update resolves and records { set, where } in updateCalls.
  */
 vi.mock('../db/pg-index.js', () => {
   /** Build a chainable select mock that resolves on .orderBy() */
@@ -36,14 +53,15 @@ vi.mock('../db/pg-index.js', () => {
     return chain;
   }
 
-  /** Build a chainable update mock that records .set() payload */
+  /** Build a chainable update mock that records .set() payload and .where() predicate */
   function makeUpdateChain() {
     const chain = {
       set: vi.fn().mockImplementation((payload: Record<string, unknown>) => {
-        updateCalls.push({ set: payload });
-        return {
-          where: vi.fn().mockResolvedValue(undefined),
-        };
+        const whereCapture = vi.fn().mockImplementation((pred: unknown) => {
+          updateCalls.push({ set: payload, where: pred });
+          return Promise.resolve(undefined);
+        });
+        return { where: whereCapture };
       }),
     };
     return chain;
@@ -82,6 +100,7 @@ function resetState() {
   selectCallIndex = 0;
   selfHostedValue = false;
   vi.clearAllMocks();
+
   // Re-apply mocks after clearAllMocks (clears call counts but NOT implementations)
   (db.select as ReturnType<typeof vi.fn>).mockImplementation(() => {
     const chain = {
@@ -95,12 +114,19 @@ function resetState() {
     };
     return chain;
   });
-  (db.update as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-    set: vi.fn().mockImplementation((payload: Record<string, unknown>) => {
-      updateCalls.push({ set: payload });
-      return { where: vi.fn().mockResolvedValue(undefined) };
-    }),
-  }));
+
+  function makeUpdateChainReset() {
+    return {
+      set: vi.fn().mockImplementation((payload: Record<string, unknown>) => ({
+        where: vi.fn().mockImplementation((pred: unknown) => {
+          updateCalls.push({ set: payload, where: pred });
+          return Promise.resolve(undefined);
+        }),
+      })),
+    };
+  }
+
+  (db.update as ReturnType<typeof vi.fn>).mockImplementation(() => makeUpdateChainReset());
   (db.transaction as ReturnType<typeof vi.fn>).mockImplementation(
     async (cb: (tx: unknown) => Promise<void>) => {
       const tx = {
@@ -116,12 +142,7 @@ function resetState() {
           };
           return chain;
         }),
-        update: vi.fn().mockImplementation(() => ({
-          set: vi.fn().mockImplementation((payload: Record<string, unknown>) => {
-            updateCalls.push({ set: payload });
-            return { where: vi.fn().mockResolvedValue(undefined) };
-          }),
-        })),
+        update: vi.fn().mockImplementation(() => makeUpdateChainReset()),
       };
       return cb(tx);
     },
@@ -131,6 +152,26 @@ function resetState() {
 beforeEach(resetState);
 
 // ── Helpers ──────────────────────────────────────────────────
+
+/**
+ * Extract the ids array from a { __inArray: ids } sentinel buried inside
+ * the { __and: [...] } predicate that freeze.ts passes to .where().
+ * Shape: { __and: [{ __eq: userId }, { __inArray: ids }] }
+ */
+function extractInArrayIds(wherePred: unknown): string[] {
+  if (!wherePred || typeof wherePred !== 'object') return [];
+  const pred = wherePred as Record<string, unknown>;
+  if ('__and' in pred && Array.isArray(pred.__and)) {
+    for (const part of pred.__and as unknown[]) {
+      if (part && typeof part === 'object' && '__inArray' in (part as object)) {
+        return (part as { __inArray: string[] }).__inArray;
+      }
+    }
+  }
+  // Direct inArray (no and wrapper — shouldn't happen in freeze.ts but be safe)
+  if ('__inArray' in pred) return pred.__inArray as string[];
+  return [];
+}
 
 /**
  * Push the row-id arrays for all 5 entity table selects.
@@ -169,15 +210,19 @@ describe('freezeExcessItems', () => {
   });
 
   describe('pro plan (unlimited)', () => {
-    it('makes no select queries and no frozen=true updates (all limits are -1)', async () => {
-      // With isUnlimited() true for every table, reconcileTable still runs but
-      // keepIds === ids and freezeIds === [] — so no frozen:true update is issued.
-      // Provide 2 rows per table so the "unlimited → freeze nobody" path is exercised.
+    it('issues no frozen=true updates and unfreezes existing rows when limits are unlimited', async () => {
+      // With isUnlimited() true for every table, reconcileTable still runs selects and
+      // issues frozen:false updates (keepIds === all ids, freezeIds === []).
+      // Provide rows per table so the "unlimited → unfreeze all" path is exercised.
       pushSelectsForAllTables(['h1', 'h2'], ['t1'], [], [], ['c1']);
       await freezeExcessItems('user-1', 'pro');
 
       const frozenTrueCalls = updateCalls.filter((c) => c.set.frozen === true);
       expect(frozenTrueCalls).toHaveLength(0);
+
+      // At least one frozen:false update must have been issued (rows were unfrozen)
+      const frozenFalseCalls = updateCalls.filter((c) => c.set.frozen === false);
+      expect(frozenFalseCalls.length).toBeGreaterThanOrEqual(1);
 
       // Pro has focusTimeEnabled=true → no enabled=false call
       const disableCalls = updateCalls.filter((c) => c.set.enabled === false);
@@ -186,23 +231,30 @@ describe('freezeExcessItems', () => {
   });
 
   describe('free plan — habits 5 total, limit 3', () => {
-    it('keeps 3 oldest (frozen=false) and freezes 2 newest (frozen=true)', async () => {
-      // habits: 5 rows ordered oldest→newest: h1..h5
+    it('keeps 3 oldest (frozen=false) and freezes 2 newest (frozen=true) — asserts exact ids', async () => {
+      // habits: 5 rows ordered oldest→newest by createdAt: h1..h5
+      // reconcileTable orders by asc(createdAt) so the mock returns them in this order.
+      // keepIds = ['h1','h2','h3'], freezeIds = ['h4','h5']
       // tasks/meetings/links/calendars: empty
       pushSelectsForAllTables(['h1', 'h2', 'h3', 'h4', 'h5'], [], [], [], []);
 
       await freezeExcessItems('user-1', 'free');
 
-      // Collect all frozen-flag updates (not the enabled=false for focus time)
+      // Partition by frozen flag — filter only the habits update calls (not focus-time)
       const frozenFalseCalls = updateCalls.filter(
         (c) => 'frozen' in c.set && c.set.frozen === false,
       );
       const frozenTrueCalls = updateCalls.filter((c) => 'frozen' in c.set && c.set.frozen === true);
 
-      // keepIds = ['h1','h2','h3'] → frozen:false
-      expect(frozenFalseCalls.length).toBeGreaterThanOrEqual(1);
-      // freezeIds = ['h4','h5'] → frozen:true
-      expect(frozenTrueCalls.length).toBeGreaterThanOrEqual(1);
+      expect(frozenFalseCalls).toHaveLength(1);
+      expect(frozenTrueCalls).toHaveLength(1);
+
+      // Assert EXACT ids — the 3 oldest kept, the 2 newest frozen
+      const keptIds = extractInArrayIds(frozenFalseCalls[0].where);
+      const frozenIds = extractInArrayIds(frozenTrueCalls[0].where);
+
+      expect(new Set(keptIds)).toEqual(new Set(['h1', 'h2', 'h3']));
+      expect(new Set(frozenIds)).toEqual(new Set(['h4', 'h5']));
 
       // CRITICAL: no update payload for the 5 entity tables should write `enabled`
       const enabledWrittenForEntities = updateCalls.filter(
@@ -272,40 +324,66 @@ describe('freezeExcessItems', () => {
   });
 
   describe('calendar primary-first ordering', () => {
-    it('always keeps the primary calendar (first in ordered results)', async () => {
+    it('always keeps the primary calendar and freezes over-limit non-primary ids — asserts exact ids', async () => {
       // Free limit = 1 calendar. reconcileCalendars orders by isPrimary desc, createdAt asc.
-      // The mock returns rows already in that order: primary-cal first.
+      // The mock returns rows already in that order: primary-cal first, then cal2, cal3.
       // keepIds = ['primary-cal'], freezeIds = ['cal2', 'cal3']
       pushSelectsForAllTables([], [], [], [], ['primary-cal', 'cal2', 'cal3']);
 
       await freezeExcessItems('user-1', 'free');
 
-      const frozenTrueCalls = updateCalls.filter((c) => c.set.frozen === true);
-      // 2 calendars should be frozen (cal2 and cal3)
-      expect(frozenTrueCalls.length).toBeGreaterThanOrEqual(1);
+      const frozenFalseCalls = updateCalls.filter(
+        (c) => 'frozen' in c.set && c.set.frozen === false,
+      );
+      const frozenTrueCalls = updateCalls.filter((c) => 'frozen' in c.set && c.set.frozen === true);
 
-      const frozenFalseCalls = updateCalls.filter((c) => c.set.frozen === false);
-      // primary-cal should be in the kept (frozen=false) set
-      expect(frozenFalseCalls.length).toBeGreaterThanOrEqual(1);
+      // Exactly one frozen=false call (calendar kept) and one frozen=true call (cal2 + cal3)
+      expect(frozenFalseCalls).toHaveLength(1);
+      expect(frozenTrueCalls).toHaveLength(1);
+
+      // Assert EXACT ids — primary-cal must be in the kept set
+      const keptIds = extractInArrayIds(frozenFalseCalls[0].where);
+      const frozenIds = extractInArrayIds(frozenTrueCalls[0].where);
+
+      expect(new Set(keptIds)).toEqual(new Set(['primary-cal']));
+      expect(new Set(frozenIds)).toEqual(new Set(['cal2', 'cal3']));
     });
   });
 
   describe('multiple tables over limit simultaneously', () => {
     it('freezes excess habits and tasks, leaving meetings/links/calendars alone', async () => {
       // habits: 6 (limit 3), tasks: 8 (limit 5), rest: under
-      pushSelectsForAllTables(
-        ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
-        ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
-        ['m1'],
-        [],
-        ['c1'],
-      );
+      // rows are returned oldest-first by the mock, matching reconcileTable's asc(createdAt) order
+      const habitIds = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
+      const taskIds = ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'];
+      pushSelectsForAllTables(habitIds, taskIds, ['m1'], [], ['c1']);
 
       await freezeExcessItems('user-1', 'free');
 
       const frozenTrueCalls = updateCalls.filter((c) => c.set.frozen === true);
       // habits: 3 frozen, tasks: 3 frozen → at least 2 separate frozen:true updates
       expect(frozenTrueCalls.length).toBeGreaterThanOrEqual(2);
+
+      // Collect all ids mentioned in frozen:true calls and frozen:false calls
+      const allFrozenTrueIds = frozenTrueCalls.flatMap((c) => extractInArrayIds(c.where));
+      const frozenFalseCalls = updateCalls.filter((c) => c.set.frozen === false);
+      const allFrozenFalseIds = frozenFalseCalls.flatMap((c) => extractInArrayIds(c.where));
+
+      // Identify habit-range and task-range ids from the frozen sets
+      const habitRange = new Set(habitIds);
+      const taskRange = new Set(taskIds);
+
+      // habits (limit 3): 3 oldest kept as frozen:false, 3 newest frozen:true
+      const habitKeptIds = allFrozenFalseIds.filter((id) => habitRange.has(id));
+      const habitFrozenIds = allFrozenTrueIds.filter((id) => habitRange.has(id));
+      expect(new Set(habitKeptIds)).toEqual(new Set(['h1', 'h2', 'h3']));
+      expect(new Set(habitFrozenIds)).toEqual(new Set(['h4', 'h5', 'h6']));
+
+      // tasks (limit 5): 5 oldest kept as frozen:false, 3 newest frozen:true
+      const taskKeptIds = allFrozenFalseIds.filter((id) => taskRange.has(id));
+      const taskFrozenIds = allFrozenTrueIds.filter((id) => taskRange.has(id));
+      expect(new Set(taskKeptIds)).toEqual(new Set(['t1', 't2', 't3', 't4', 't5']));
+      expect(new Set(taskFrozenIds)).toEqual(new Set(['t6', 't7', 't8']));
     });
   });
 

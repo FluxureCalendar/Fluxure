@@ -4,7 +4,7 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { calendars, settings, schedule } from '$lib/api';
+  import { calendars, settings, schedule, billing, ApiError } from '$lib/api';
   import { setSyncing } from '$lib/sync-state.svelte';
   import type { Calendar } from '@fluxure/shared';
   import { CalendarMode } from '@fluxure/shared';
@@ -144,6 +144,20 @@
     }
   }
 
+  async function activateCalendar(id: string) {
+    try {
+      await billing.activeSet('calendar', [id], []);
+      await loadCalendars(true);
+    } catch (e) {
+      showToast(
+        e instanceof ApiError && e.status === 409
+          ? 'Plan limit reached — freeze another item first'
+          : 'Could not activate item',
+        'error',
+      );
+    }
+  }
+
   async function discoverCalendars() {
     if (discovering) return;
     discovering = true;
@@ -271,7 +285,11 @@
     {#if calendarList.length > 0}
       <div class="calendar-list">
         {#each calendarList as cal (cal.id)}
-          <div class="calendar-row" class:calendar-disabled={!cal.enabled}>
+          <div
+            class="calendar-row"
+            class:calendar-disabled={!cal.enabled}
+            class:is-frozen={cal.frozen}
+          >
             <div class="calendar-left">
               <span class="calendar-color" style:background-color={cal.color}></span>
               <div class="calendar-text">
@@ -286,27 +304,41 @@
               </div>
             </div>
             <div class="calendar-controls">
-              {#if cal.enabled && !cal.isPrimary}
-                <select
-                  class="mode-select"
-                  value={cal.mode}
-                  onchange={(e) =>
-                    setCalendarMode(cal, (e.target as HTMLSelectElement).value as CalendarMode)}
-                  aria-label="Mode for {cal.name}"
+              {#if cal.frozen}
+                <span
+                  class="frozen-badge"
+                  title="Frozen — over your Free plan limit. Upgrade, or activate this in place of another."
+                  >Frozen</span
                 >
-                  <option value={CalendarMode.Writable}>Writable</option>
-                  <option value={CalendarMode.Locked}>Read-only</option>
-                </select>
-              {/if}
-              {#if !cal.isPrimary}
                 <button
-                  class="toggle-switch"
-                  class:toggle-on={cal.enabled}
-                  onclick={() => toggleCalendar(cal)}
-                  role="switch"
-                  aria-checked={cal.enabled}
-                  aria-label="Toggle {cal.name}"
-                ></button>
+                  type="button"
+                  class="frozen-activate"
+                  aria-label="Activate {cal.name}"
+                  onclick={() => activateCalendar(cal.id)}>Activate</button
+                >
+              {:else}
+                {#if cal.enabled && !cal.isPrimary}
+                  <select
+                    class="mode-select"
+                    value={cal.mode}
+                    onchange={(e) =>
+                      setCalendarMode(cal, (e.target as HTMLSelectElement).value as CalendarMode)}
+                    aria-label="Mode for {cal.name}"
+                  >
+                    <option value={CalendarMode.Writable}>Writable</option>
+                    <option value={CalendarMode.Locked}>Read-only</option>
+                  </select>
+                {/if}
+                {#if !cal.isPrimary}
+                  <button
+                    class="toggle-switch"
+                    class:toggle-on={cal.enabled}
+                    onclick={() => toggleCalendar(cal)}
+                    role="switch"
+                    aria-checked={cal.enabled}
+                    aria-label="Toggle {cal.name}"
+                  ></button>
+                {/if}
               {/if}
             </div>
           </div>

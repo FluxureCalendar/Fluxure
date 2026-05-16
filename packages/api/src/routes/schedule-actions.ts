@@ -3,6 +3,7 @@ import { eq, and } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import crypto from 'node:crypto';
 import { db } from '../db/pg-index.js';
+import { notFrozen } from '../billing/active-filter.js';
 import {
   scheduledEvents,
   calendarEvents,
@@ -146,7 +147,9 @@ async function handleDeleteManagedEvents(
       const enabledCals = await db
         .select()
         .from(calendars)
-        .where(and(eq(calendars.userId, userId), eq(calendars.enabled, true)));
+        .where(
+          and(eq(calendars.userId, userId), eq(calendars.enabled, true), notFrozen(calendars)),
+        );
       for (const cal of enabledCals) {
         const deleted = await calClient.deleteAllManagedEvents(cal.googleCalendarId);
         googleDeleted += deleted;

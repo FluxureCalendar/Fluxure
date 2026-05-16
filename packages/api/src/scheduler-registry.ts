@@ -61,6 +61,7 @@ import {
 } from './distributed/scheduler-owner.js';
 import { isQueuesStarted } from './jobs/queues.js';
 import { registerBulkForUser, cancelAllForUser } from './jobs/habit-auto-complete.js';
+import { activeForScheduling } from './billing/active-filter.js';
 
 const log = createLogger('scheduler');
 
@@ -468,18 +469,9 @@ export class UserScheduler {
   private async loadDomainObjects() {
     const userId = this.userId;
     const [allHabitsRaw, allTasksRaw, allMeetingsRaw, allFocusRulesRaw] = await Promise.all([
-      db
-        .select()
-        .from(habits)
-        .where(and(eq(habits.userId, userId), eq(habits.enabled, true))),
-      db
-        .select()
-        .from(tasks)
-        .where(and(eq(tasks.userId, userId), eq(tasks.enabled, true))),
-      db
-        .select()
-        .from(smartMeetings)
-        .where(and(eq(smartMeetings.userId, userId), eq(smartMeetings.enabled, true))),
+      db.select().from(habits).where(activeForScheduling(habits, userId)),
+      db.select().from(tasks).where(activeForScheduling(tasks, userId)),
+      db.select().from(smartMeetings).where(activeForScheduling(smartMeetings, userId)),
       db.select().from(focusTimeRules).where(eq(focusTimeRules.userId, userId)),
     ]);
     return {

@@ -3,6 +3,7 @@ import { SCHEDULE_CHANGES_RETENTION_DAYS_DEFAULT } from '@fluxure/shared';
 import { db } from './db/pg-index.js';
 import { createLogger } from './logger.js';
 import { revertExpiredTrials } from './billing/trial.js';
+import { sendTrialWarnings } from './billing/trial-warnings.js';
 
 const log = createLogger('data-retention');
 
@@ -151,6 +152,7 @@ async function runRetentionCleanup(): Promise<void> {
       webhookEventsDeleted,
       calendarEventsDeleted,
       habitCompletionsDeleted,
+      trialWarningsSent,
       trialsReverted,
     ] = await Promise.all([
       cleanupActivityLog(),
@@ -161,6 +163,7 @@ async function runRetentionCleanup(): Promise<void> {
       cleanupStripeWebhookEvents(),
       cleanupCalendarEvents(),
       cleanupOldHabitCompletions(),
+      sendTrialWarnings(),
       revertExpiredTrials(),
     ]);
 
@@ -173,6 +176,7 @@ async function runRetentionCleanup(): Promise<void> {
       webhookEventsDeleted > 0 ||
       calendarEventsDeleted > 0 ||
       habitCompletionsDeleted > 0 ||
+      trialWarningsSent > 0 ||
       trialsReverted > 0
     ) {
       log.info(
@@ -185,6 +189,7 @@ async function runRetentionCleanup(): Promise<void> {
           webhookEventsDeleted,
           calendarEventsDeleted,
           habitCompletionsDeleted,
+          trialWarningsSent,
           trialsReverted,
         },
         'Data retention cleanup completed',

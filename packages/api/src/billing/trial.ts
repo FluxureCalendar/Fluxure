@@ -5,6 +5,7 @@ import type { PlanType } from '@fluxure/shared';
 import { freezeExcessItems } from './freeze.js';
 import { broadcastToUser } from '../ws.js';
 import { createLogger } from '../logger.js';
+import { sendTrialEndedEmail } from '../auth/email.js';
 
 const log = createLogger('trial');
 
@@ -66,10 +67,11 @@ export async function revertExpiredTrials(): Promise<number> {
         lte(users.planPeriodEnd, new Date().toISOString()),
       ),
     )
-    .returning({ id: users.id });
+    .returning({ id: users.id, email: users.email, trialWarningStage: users.trialWarningStage });
 
-  // Freeze excess items and notify each reverted user
-  for (const { id: userId } of rows) {
+  // Freeze excess items, notify, and send trial-ended email for each reverted user
+  for (const row of rows) {
+    const { id: userId } = row;
     try {
       await freezeExcessItems(userId, 'free');
       broadcastToUser(userId, 'plan_updated', 'Trial expired', {
@@ -78,6 +80,18 @@ export async function revertExpiredTrials(): Promise<number> {
       });
     } catch (err) {
       log.error({ err, userId }, 'Failed to freeze items after trial expiry');
+      continue;
+    }
+    if (row.trialWarningStage < 3) {
+      try {
+        await sendTrialEndedEmail(row.email, 0);
+        await db
+          .update(users)
+          .set({ trialWarningStage: 3 })
+          .where(and(eq(users.id, row.id), eq(users.trialWarningStage, row.trialWarningStage)));
+      } catch (err) {
+        log.error({ err, userId }, 'Failed to send trial-ended email');
+      }
     }
   }
 

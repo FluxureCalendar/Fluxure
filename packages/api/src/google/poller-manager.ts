@@ -3,6 +3,7 @@ import { eq, and, gte } from 'drizzle-orm';
 import { SYNC_LOOKBACK_MS } from '@fluxure/shared';
 import { db } from '../db/pg-index.js';
 import { calendars, calendarEvents, scheduledEvents } from '../db/pg-schema.js';
+import { notFrozen } from '../billing/active-filter.js';
 import { GoogleCalendarClient } from './calendar.js';
 import { CalendarPoller } from './polling.js';
 import type { CalendarEvent } from '@fluxure/shared';
@@ -49,8 +50,8 @@ export class CalendarPollerManager {
   /** Start pollers for all enabled calendars (scoped to user if userId set). */
   async startAll(): Promise<void> {
     const query = this.userId
-      ? and(eq(calendars.userId, this.userId), eq(calendars.enabled, true))
-      : eq(calendars.enabled, true);
+      ? and(eq(calendars.userId, this.userId), eq(calendars.enabled, true), notFrozen(calendars))
+      : and(eq(calendars.enabled, true), notFrozen(calendars));
     const enabledCalendars = await db.select().from(calendars).where(query!);
 
     for (const cal of enabledCalendars) {

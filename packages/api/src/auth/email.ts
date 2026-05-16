@@ -277,3 +277,42 @@ export async function sendPasswordResetEmail(email: string, token: string): Prom
 
   logDevEmail(info);
 }
+
+export async function sendTrialEndingEmail(email: string, daysLeft: number): Promise<void> {
+  const appUrl = getAppUrl();
+  const info = await getTransporter().sendMail({
+    from: getFromAddress(),
+    to: email,
+    subject: `Your ${BRAND.name} Pro trial ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`,
+    html: buildEmailHtml({
+      heading: `Your Pro trial ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`,
+      bodyText: `When your trial ends, items beyond the Free plan limits will be paused until you upgrade. Upgrade now to keep everything scheduling without interruption.`,
+      ctaText: 'Upgrade to Pro',
+      ctaUrl: `${appUrl}/settings?billing=upgrade`,
+      footerText: `You're receiving this because you're on a ${BRAND.name} Pro trial.`,
+    }),
+    text: `Your ${BRAND.name} Pro trial ends in ${daysLeft} day(s). Upgrade: ${appUrl}/settings?billing=upgrade`,
+  });
+  logDevEmail(info);
+}
+
+export async function sendTrialEndedEmail(email: string, frozenCount: number): Promise<void> {
+  const appUrl = getAppUrl();
+  const info = await getTransporter().sendMail({
+    from: getFromAddress(),
+    to: email,
+    subject: `Your ${BRAND.name} Pro trial has ended`,
+    html: buildEmailHtml({
+      heading: 'Your Pro trial has ended',
+      bodyText:
+        frozenCount > 0
+          ? `${frozenCount} item${frozenCount === 1 ? '' : 's'} beyond the Free plan limits ${frozenCount === 1 ? 'is' : 'are'} now paused. Upgrade to Pro to reactivate everything, or choose which items stay active in Settings.`
+          : `You're now on the Free plan. Upgrade any time to unlock Pro limits.`,
+      ctaText: 'Upgrade to Pro',
+      ctaUrl: `${appUrl}/settings?billing=upgrade`,
+      footerText: `You're receiving this because your ${BRAND.name} Pro trial ended.`,
+    }),
+    text: `Your ${BRAND.name} Pro trial has ended. Upgrade: ${appUrl}/settings?billing=upgrade`,
+  });
+  logDevEmail(info);
+}

@@ -246,6 +246,7 @@ describe('Billing webhook (POST /api/webhooks/stripe)', () => {
           plan: 'pro',
           paymentStatus: 'paid',
           stripeSubscriptionId: 'sub_123',
+          trialWarningStage: 0,
         }),
       );
 

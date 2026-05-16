@@ -14,6 +14,7 @@
 
   import Toast from '$lib/components/Toast.svelte';
   import ConnectionBanner from '$lib/components/ConnectionBanner.svelte';
+  import TrialBanner from '$lib/components/TrialBanner.svelte';
   import SearchPalette from '$lib/components/SearchPalette.svelte';
   import ProfileMenu from '$lib/components/ProfileMenu.svelte';
 
@@ -295,6 +296,7 @@
     <!-- Main content -->
     <div class="main-wrapper">
       <ConnectionBanner status={connectionStatus} />
+      <TrialBanner />
       <main
         id="main-content"
         class="main-content"

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { pageTitle } from '$lib/brand';
-  import { meetings } from '$lib/api';
+  import { meetings, billing, ApiError } from '$lib/api';
   import type { SmartMeeting } from '@fluxure/shared';
   import { showToast } from '$lib/toast.svelte';
   import { formatDuration } from '$lib/utils/format';
@@ -67,6 +67,20 @@
       if (err instanceof Error && !('handled' in err)) {
         showToast('Failed to delete meeting', 'error');
       }
+    }
+  }
+
+  async function activateMeeting(id: string) {
+    try {
+      await billing.activeSet('meeting', [id], []);
+      await loadMeetings();
+    } catch (e) {
+      showToast(
+        e instanceof ApiError && e.status === 409
+          ? 'Plan limit reached — freeze another item first'
+          : 'Could not activate item',
+        'error',
+      );
     }
   }
 
@@ -144,7 +158,7 @@
       <EntityCard
         name={m.name}
         color={m.color || 'var(--color-accent)'}
-        paused={!m.enabled}
+        paused={!m.enabled || !!m.frozen}
         confirmingDelete={confirmDeleteId === m.id}
         onclick={() => openEdit(m)}
         ondelete={() => (confirmDeleteId = m.id)}
@@ -177,6 +191,19 @@
               <Pause size={11} />
               Paused
             </span>
+          {/if}
+          {#if m.frozen}
+            <span
+              class="frozen-badge"
+              title="Frozen — over your Free plan limit. Upgrade, or activate this in place of another."
+              >Frozen</span
+            >
+            <button
+              type="button"
+              class="frozen-activate"
+              aria-label="Activate {m.name}"
+              onclick={() => activateMeeting(m.id)}>Activate</button
+            >
           {/if}
         {/snippet}
 

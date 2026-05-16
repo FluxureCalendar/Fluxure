@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { eq, and, gte, lte, inArray, sql } from 'drizzle-orm';
 import rateLimit from 'express-rate-limit';
 import { db } from '../db/pg-index.js';
+import { notFrozen } from '../billing/active-filter.js';
 import {
   schedulingLinks,
   scheduledEvents,
@@ -104,7 +105,9 @@ async function getOccupiedIntervals(
     db
       .select({ id: calendars.id })
       .from(calendars)
-      .where(and(eq(calendars.userId, linkUserId), eq(calendars.enabled, true))),
+      .where(
+        and(eq(calendars.userId, linkUserId), eq(calendars.enabled, true), notFrozen(calendars)),
+      ),
   ]);
   const calIds = enabledCals.map((c) => c.id);
 
@@ -444,7 +447,13 @@ router.post(
         const enabledCals = await tx
           .select({ id: calendars.id })
           .from(calendars)
-          .where(and(eq(calendars.userId, link.userId), eq(calendars.enabled, true)));
+          .where(
+            and(
+              eq(calendars.userId, link.userId),
+              eq(calendars.enabled, true),
+              notFrozen(calendars),
+            ),
+          );
         const enabledCalIds = enabledCals.map((c) => c.id);
 
         const managed = await tx

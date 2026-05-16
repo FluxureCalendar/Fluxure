@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { eq, and, gte, lte, lt, desc, inArray } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import { db } from '../db/pg-index.js';
+import { notFrozen } from '../billing/active-filter.js';
 import {
   scheduledEvents,
   calendarEvents,
@@ -165,7 +166,7 @@ router.get(
     const enabledCals = await db
       .select()
       .from(calendars)
-      .where(and(eq(calendars.userId, userId), eq(calendars.enabled, true)));
+      .where(and(eq(calendars.userId, userId), eq(calendars.enabled, true), notFrozen(calendars)));
     const enabledCalIds = enabledCals.map((c) => c.id);
     const calColorMap = new Map(enabledCals.map((c) => [c.id, c.color]));
     const calNameMap = new Map(enabledCals.map((c) => [c.id, c.name]));

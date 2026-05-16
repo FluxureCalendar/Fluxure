@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { pageTitle } from '$lib/brand';
-  import { tasks } from '$lib/api';
+  import { tasks, billing, ApiError } from '$lib/api';
   import type { Task } from '@fluxure/shared';
   import { Priority, TaskStatus } from '@fluxure/shared';
   import { showToast } from '$lib/toast.svelte';
@@ -69,6 +69,20 @@
       showToast('Task deleted', 'success');
     } catch (err) {
       if (err instanceof Error && !('handled' in err)) showToast('Failed to delete task', 'error');
+    }
+  }
+
+  async function activateTask(id: string) {
+    try {
+      await billing.activeSet('task', [id], []);
+      await loadTasks();
+    } catch (e) {
+      showToast(
+        e instanceof ApiError && e.status === 409
+          ? 'Plan limit reached — freeze another item first'
+          : 'Could not activate item',
+        'error',
+      );
     }
   }
 
@@ -156,6 +170,7 @@
         <EntityCard
           name={t.name}
           color={t.color || 'var(--color-accent)'}
+          paused={!!t.frozen}
           index={i}
           confirmingDelete={confirmDeleteId === t.id}
           onclick={() => openEdit(t)}
@@ -177,6 +192,19 @@
                 <CalendarDays size={11} />
                 {fmtDate(t.dueDate)}
               </span>
+            {/if}
+            {#if t.frozen}
+              <span
+                class="frozen-badge"
+                title="Frozen — over your Free plan limit. Upgrade, or activate this in place of another."
+                >Frozen</span
+              >
+              <button
+                type="button"
+                class="frozen-activate"
+                aria-label="Activate {t.name}"
+                onclick={() => activateTask(t.id)}>Activate</button
+              >
             {/if}
           {/snippet}
 

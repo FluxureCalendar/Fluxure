@@ -1,6 +1,7 @@
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
 import { habits, tasks, smartMeetings, focusTimeRules, scheduleChanges } from '../db/pg-schema.js';
+import { activeForScheduling } from '../billing/active-filter.js';
 import { calculateScheduleQuality } from '@fluxure/engine';
 import type {
   BufferConfig,
@@ -52,18 +53,12 @@ export async function loadDomainObjectsForQuality(userId: string): Promise<{
 }> {
   const [allHabitsRaw, allTasksRaw, allMeetingsRaw, allFocusRulesRaw, userSettings] =
     await Promise.all([
-      db
-        .select()
-        .from(habits)
-        .where(and(eq(habits.userId, userId), eq(habits.enabled, true))),
+      db.select().from(habits).where(activeForScheduling(habits, userId)),
       db
         .select()
         .from(tasks)
-        .where(and(eq(tasks.userId, userId), eq(tasks.enabled, true), eq(tasks.status, 'open'))),
-      db
-        .select()
-        .from(smartMeetings)
-        .where(and(eq(smartMeetings.userId, userId), eq(smartMeetings.enabled, true))),
+        .where(and(activeForScheduling(tasks, userId), eq(tasks.status, 'open'))),
+      db.select().from(smartMeetings).where(activeForScheduling(smartMeetings, userId)),
       db
         .select()
         .from(focusTimeRules)

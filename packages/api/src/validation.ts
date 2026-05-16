@@ -344,3 +344,17 @@ export const deleteAccountSchema = z.object({
   password: z.string().min(1).max(128).optional(),
   email: z.string().email().max(254).optional(),
 });
+
+export const activeSetSchema = z
+  .object({
+    type: z.enum(['habit', 'task', 'meeting', 'link', 'calendar']),
+    activate: z.array(z.string().uuid()).max(500),
+    freeze: z.array(z.string().uuid()).max(500),
+  })
+  .refine(
+    (v) => {
+      const set = new Set(v.activate);
+      return v.freeze.every((id) => !set.has(id));
+    },
+    { message: 'activate and freeze must be disjoint' },
+  );

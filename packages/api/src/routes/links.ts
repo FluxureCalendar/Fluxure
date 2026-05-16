@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { eq, and, gte, lte, inArray, sql, count } from 'drizzle-orm';
 
 import { db } from '../db/pg-index.js';
+import { notFrozen } from '../billing/active-filter.js';
 import {
   schedulingLinks,
   scheduledEvents,
@@ -242,7 +243,9 @@ router.get(
     const enabledCals = await db
       .select({ id: calendars.id })
       .from(calendars)
-      .where(and(eq(calendars.userId, req.userId), eq(calendars.enabled, true)));
+      .where(
+        and(eq(calendars.userId, req.userId), eq(calendars.enabled, true), notFrozen(calendars)),
+      );
     const enabledCalIds = enabledCals.map((c) => c.id);
 
     const [existingEvents, externalEvents] = await Promise.all([
@@ -442,7 +445,13 @@ router.post(
         const enabledCals = await tx
           .select({ id: calendars.id })
           .from(calendars)
-          .where(and(eq(calendars.userId, req.userId), eq(calendars.enabled, true)));
+          .where(
+            and(
+              eq(calendars.userId, req.userId),
+              eq(calendars.enabled, true),
+              notFrozen(calendars),
+            ),
+          );
         const calIds = enabledCals.map((c) => c.id);
 
         if (calIds.length > 0) {

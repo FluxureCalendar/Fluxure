@@ -99,6 +99,7 @@ async function handleEvent(event: Stripe.Event, stripe: Stripe): Promise<void> {
           stripeSubscriptionId: subscription.id,
           planPeriodEnd: getPeriodEnd(subscription),
           billingInterval: getBillingInterval(subscription),
+          trialWarningStage: 0,
         })
         .where(eq(users.id, userId));
       await unfreezeAllItems(userId);

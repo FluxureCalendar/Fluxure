@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { pageTitle } from '$lib/brand';
-  import { links } from '$lib/api';
+  import { links, billing, ApiError } from '$lib/api';
   import type { SchedulingLink } from '@fluxure/shared';
   import { showToast } from '$lib/toast.svelte';
   import { formatDuration } from '$lib/utils/format';
@@ -85,6 +85,20 @@
     }
   }
 
+  async function activateLink(id: string) {
+    try {
+      await billing.activeSet('link', [id], []);
+      await loadLinks();
+    } catch (e) {
+      showToast(
+        e instanceof ApiError && e.status === 409
+          ? 'Plan limit reached — freeze another item first'
+          : 'Could not activate item',
+        'error',
+      );
+    }
+  }
+
   async function copyUrl(slug: string) {
     const url = `${window.location.origin}/book/${slug}`;
     try {
@@ -129,7 +143,7 @@
   {:else}
     <div class="links-grid">
       {#each linkList as link, i (link.id)}
-        <div class="link-card card-enter" style="--i: {i}">
+        <div class="link-card card-enter" class:is-frozen={link.frozen} style="--i: {i}">
           <div class="link-header">
             <h3 class="link-name">{link.name}</h3>
             <div class="link-actions">
@@ -158,8 +172,23 @@
               <span class="duration-tag">{formatDuration(d)}</span>
             {/each}
           </div>
-          {#if !link.enabled}
+          {#if !link.enabled && !link.frozen}
             <span class="badge-amber">Disabled</span>
+          {/if}
+          {#if link.frozen}
+            <div class="link-frozen-row">
+              <span
+                class="frozen-badge"
+                title="Frozen — over your Free plan limit. Upgrade, or activate this in place of another."
+                >Frozen</span
+              >
+              <button
+                type="button"
+                class="frozen-activate"
+                aria-label="Activate {link.name}"
+                onclick={() => activateLink(link.id)}>Activate</button
+              >
+            </div>
           {/if}
         </div>
       {/each}
@@ -295,5 +324,12 @@
 
   .link-form {
     @include flex-col(var(--space-4));
+  }
+
+  .link-frozen-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
   }
 </style>

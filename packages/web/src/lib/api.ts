@@ -499,6 +499,15 @@ export const billing = {
       body: JSON.stringify({ interval }),
     }),
   portal: () => request<{ url: string }>('/billing/portal', { method: 'POST' }),
+  activeSet: (
+    type: 'habit' | 'task' | 'meeting' | 'link' | 'calendar',
+    activate: string[],
+    freeze: string[],
+  ) =>
+    request<{ ok: true }>('/billing/active-set', {
+      method: 'POST',
+      body: JSON.stringify({ type, activate, freeze }),
+    }),
 };
 
 export const auth = {

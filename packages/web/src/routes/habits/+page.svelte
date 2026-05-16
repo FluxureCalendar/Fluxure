@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { pageTitle } from '$lib/brand';
-  import { habits } from '$lib/api';
+  import { habits, billing, ApiError } from '$lib/api';
   import type { Habit } from '@fluxure/shared';
   import { showToast } from '$lib/toast.svelte';
   import { formatDuration } from '$lib/utils/format';
@@ -65,6 +65,20 @@
       if (err instanceof Error && !('handled' in err)) {
         showToast('Failed to delete habit', 'error');
       }
+    }
+  }
+
+  async function activateHabit(id: string) {
+    try {
+      await billing.activeSet('habit', [id], []);
+      await loadHabits();
+    } catch (e) {
+      showToast(
+        e instanceof ApiError && e.status === 409
+          ? 'Plan limit reached — freeze another item first'
+          : 'Could not activate item',
+        'error',
+      );
     }
   }
 
@@ -134,7 +148,7 @@
         <EntityCard
           name={h.name}
           color={h.color || 'var(--color-accent)'}
-          paused={h.enabled === false}
+          paused={h.enabled === false || h.frozen === true}
           index={i}
           confirmingDelete={confirmDeleteId === h.id}
           onclick={() => openEdit(h)}
@@ -158,6 +172,19 @@
                 <Pause size={11} />
                 Paused
               </span>
+            {/if}
+            {#if h.frozen}
+              <span
+                class="frozen-badge"
+                title="Frozen — over your Free plan limit. Upgrade, or activate this in place of another."
+                >Frozen</span
+              >
+              <button
+                type="button"
+                class="frozen-activate"
+                aria-label="Activate {h.name}"
+                onclick={() => activateHabit(h.id)}>Activate</button
+              >
             {/if}
           {/snippet}
 

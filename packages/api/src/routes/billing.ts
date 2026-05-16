@@ -1,8 +1,17 @@
 import { Router } from 'express';
 import Stripe from 'stripe';
-import { eq } from 'drizzle-orm';
+import { and, count, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
-import { users } from '../db/pg-schema.js';
+import {
+  users,
+  habits,
+  tasks,
+  smartMeetings,
+  schedulingLinks,
+  calendars,
+} from '../db/pg-schema.js';
+import { broadcastToUser } from '../ws.js';
+import { activeSetSchema } from '../validation.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { z } from 'zod/v4';
 import { sendError } from './helpers.js';
@@ -19,6 +28,8 @@ import {
 
 const log = createLogger('billing');
 const router = Router();
+
+class ActiveSetLimitError extends Error {}
 
 let _stripe: Stripe | null = null;
 function getStripe(): Stripe | null {
@@ -196,6 +207,89 @@ router.post(
     });
 
     res.json({ url: session.url });
+  }),
+);
+
+const ACTIVE_SET_TABLES = {
+  habit: { table: habits, limitKey: 'maxHabits' },
+  task: { table: tasks, limitKey: 'maxTasks' },
+  meeting: { table: smartMeetings, limitKey: 'maxMeetings' },
+  link: { table: schedulingLinks, limitKey: 'maxSchedulingLinks' },
+  calendar: { table: calendars, limitKey: 'maxCalendars' },
+} as const;
+
+// POST /api/billing/active-set
+router.post(
+  '/active-set',
+  asyncHandler(async (req, res) => {
+    if (isSelfHosted()) {
+      sendError(res, 400, 'All items are active on your plan');
+      return;
+    }
+
+    const parsed = activeSetSchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendError(res, 400, 'Invalid active-set request');
+      return;
+    }
+    const { type, activate, freeze } = parsed.data;
+
+    const [user] = await db
+      .select({
+        plan: users.plan,
+        planPeriodEnd: users.planPeriodEnd,
+        stripeSubscriptionId: users.stripeSubscriptionId,
+      })
+      .from(users)
+      .where(eq(users.id, req.userId));
+    if (!user) {
+      sendError(res, 404, 'Not found');
+      return;
+    }
+
+    const effectivePlan = getEffectivePlan(user);
+    const limit = getPlanLimits(effectivePlan)[ACTIVE_SET_TABLES[type].limitKey];
+    if (limit === -1) {
+      sendError(res, 400, 'All items are active on your plan');
+      return;
+    }
+
+    const { table } = ACTIVE_SET_TABLES[type];
+
+    try {
+      await db.transaction(async (tx) => {
+        if (activate.length > 0) {
+          await tx
+            .update(table)
+            .set({ frozen: false })
+            .where(and(eq(table.userId, req.userId), inArray(table.id, activate)));
+        }
+        if (freeze.length > 0) {
+          await tx
+            .update(table)
+            .set({ frozen: true })
+            .where(and(eq(table.userId, req.userId), inArray(table.id, freeze)));
+        }
+
+        const [{ value: activeCount }] = await tx
+          .select({ value: count() })
+          .from(table)
+          .where(and(eq(table.userId, req.userId), eq(table.frozen, false)));
+
+        if (activeCount > limit) {
+          throw new ActiveSetLimitError();
+        }
+      });
+    } catch (err) {
+      if (err instanceof ActiveSetLimitError) {
+        sendError(res, 409, `That would exceed your plan limit of ${limit}`);
+        return;
+      }
+      throw err;
+    }
+
+    broadcastToUser(req.userId, 'plan_updated', 'Active items updated', {});
+    res.json({ ok: true });
   }),
 );
 
