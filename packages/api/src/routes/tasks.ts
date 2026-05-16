@@ -52,6 +52,7 @@ router.get(
         isUpNext: tasks.isUpNext,
         skipBuffer: tasks.skipBuffer,
         enabled: tasks.enabled,
+        frozen: tasks.frozen,
         userId: tasks.userId,
         calendarId: tasks.calendarId,
         color: tasks.color,

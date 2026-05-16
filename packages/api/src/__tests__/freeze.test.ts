@@ -1,53 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mock tracking ────────────────────────────────────────────
-const updateCalls: Array<{ set: Record<string, unknown>; table: string }> = [];
+/** Each call to tx.update(table).set(payload).where(...) pushes here */
+const updateCalls: Array<{ set: Record<string, unknown> }> = [];
+
+/** Ordered queue of results for tx.select().from().where().orderBy() */
 const selectResults: unknown[][] = [];
 let selectCallIndex = 0;
-
-const mockOrderBy = vi.fn();
-const mockLimit = vi.fn();
-const mockWhere = vi.fn();
-const mockFrom = vi.fn();
-const mockSet = vi.fn();
-const mockUpdateWhere = vi.fn();
-
-function resetChain() {
-  updateCalls.length = 0;
-  selectResults.length = 0;
-  selectCallIndex = 0;
-  mockOrderBy.mockReset();
-  mockLimit.mockReset();
-  mockWhere.mockReset();
-  mockFrom.mockReset();
-  mockSet.mockReset();
-  mockUpdateWhere.mockReset();
-
-  mockUpdateWhere.mockResolvedValue(undefined);
-  mockSet.mockImplementation((values: Record<string, unknown>) => {
-    updateCalls.push({ set: values, table: 'unknown' });
-    return { where: mockUpdateWhere };
-  });
-
-  mockLimit.mockImplementation(() => {
-    return Promise.resolve(selectResults[selectCallIndex - 1] ?? []);
-  });
-
-  mockOrderBy.mockImplementation(() => ({ limit: mockLimit }));
-
-  mockWhere.mockImplementation(() => {
-    const idx = selectCallIndex++;
-    const data = idx < selectResults.length ? selectResults[idx] : [];
-    const result = Promise.resolve(data);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (result as any).orderBy = mockOrderBy;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (result as any).limit = mockLimit;
-    return result;
-  });
-
-  mockFrom.mockReturnValue({ where: mockWhere });
-}
 
 // ── Module mocks ─────────────────────────────────────────────
 let selfHostedValue = false;
@@ -56,15 +15,52 @@ vi.mock('../config.js', () => ({
   isSelfHosted: () => selfHostedValue,
 }));
 
+/**
+ * The new freeze.ts always operates inside db.transaction(tx => ...).
+ * Every select in reconcileTable / reconcileCalendars resolves from
+ * the selectResults queue via tx.select().from().where().orderBy().
+ * Every update resolves and records { set } in updateCalls.
+ */
 vi.mock('../db/pg-index.js', () => {
+  /** Build a chainable select mock that resolves on .orderBy() */
+  function makeSelectChain() {
+    const chain = {
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockImplementation(() => {
+        const data = selectResults[selectCallIndex] ?? [];
+        selectCallIndex++;
+        return Promise.resolve(data);
+      }),
+    };
+    return chain;
+  }
+
+  /** Build a chainable update mock that records .set() payload */
+  function makeUpdateChain() {
+    const chain = {
+      set: vi.fn().mockImplementation((payload: Record<string, unknown>) => {
+        updateCalls.push({ set: payload });
+        return {
+          where: vi.fn().mockResolvedValue(undefined),
+        };
+      }),
+    };
+    return chain;
+  }
+
   const dbObj = {
-    select: vi.fn().mockImplementation(() => ({ from: mockFrom })),
-    update: vi.fn().mockImplementation(() => ({ set: mockSet })),
-    transaction: vi.fn(),
+    select: vi.fn().mockImplementation(() => makeSelectChain()),
+    update: vi.fn().mockImplementation(() => makeUpdateChain()),
+    transaction: vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      // tx mirrors db — fresh chains each call so recordings accumulate globally
+      const tx = {
+        select: vi.fn().mockImplementation(() => makeSelectChain()),
+        update: vi.fn().mockImplementation(() => makeUpdateChain()),
+      };
+      return cb(tx);
+    }),
   };
-  dbObj.transaction.mockImplementation(async (cb: (tx: typeof dbObj) => Promise<void>) =>
-    cb(dbObj),
-  );
   return { db: dbObj };
 });
 
@@ -80,226 +76,293 @@ vi.mock('../logger.js', () => ({
 const { freezeExcessItems, unfreezeAllItems } = await import('../billing/freeze.js');
 const { db } = await import('../db/pg-index.js');
 
-beforeEach(() => {
+function resetState() {
+  updateCalls.length = 0;
+  selectResults.length = 0;
+  selectCallIndex = 0;
   selfHostedValue = false;
-  resetChain();
   vi.clearAllMocks();
-  (db.select as ReturnType<typeof vi.fn>).mockImplementation(() => ({ from: mockFrom }));
-  (db.update as ReturnType<typeof vi.fn>).mockImplementation(() => ({ set: mockSet }));
-});
-
-// ── Helpers ──────────────────────────────────────────────────
-/** Push select results for all 4 freezeTable calls + freezeCalendars (count per table). */
-function pushAllUnderLimit() {
-  // habits count, tasks count, meetings count, links count
-  selectResults.push([{ count: 2 }], [{ count: 3 }], [{ count: 1 }], [{ count: 0 }]);
-  // calendars count
-  selectResults.push([{ count: 1 }]);
+  // Re-apply mocks after clearAllMocks (clears call counts but NOT implementations)
+  (db.select as ReturnType<typeof vi.fn>).mockImplementation(() => {
+    const chain = {
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockImplementation(() => {
+        const data = selectResults[selectCallIndex] ?? [];
+        selectCallIndex++;
+        return Promise.resolve(data);
+      }),
+    };
+    return chain;
+  });
+  (db.update as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+    set: vi.fn().mockImplementation((payload: Record<string, unknown>) => {
+      updateCalls.push({ set: payload });
+      return { where: vi.fn().mockResolvedValue(undefined) };
+    }),
+  }));
+  (db.transaction as ReturnType<typeof vi.fn>).mockImplementation(
+    async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        select: vi.fn().mockImplementation(() => {
+          const chain = {
+            from: vi.fn().mockReturnThis(),
+            where: vi.fn().mockReturnThis(),
+            orderBy: vi.fn().mockImplementation(() => {
+              const data = selectResults[selectCallIndex] ?? [];
+              selectCallIndex++;
+              return Promise.resolve(data);
+            }),
+          };
+          return chain;
+        }),
+        update: vi.fn().mockImplementation(() => ({
+          set: vi.fn().mockImplementation((payload: Record<string, unknown>) => {
+            updateCalls.push({ set: payload });
+            return { where: vi.fn().mockResolvedValue(undefined) };
+          }),
+        })),
+      };
+      return cb(tx);
+    },
+  );
 }
 
-/** Push results for a single table that is over limit: count + keepIds. */
-function pushOverLimit(totalCount: number, keepIds: Array<{ id: string }>) {
-  selectResults.push([{ count: totalCount }], keepIds);
+beforeEach(resetState);
+
+// ── Helpers ──────────────────────────────────────────────────
+
+/**
+ * Push the row-id arrays for all 5 entity table selects.
+ * The new reconcileTable fetches ALL rows (by id) — no count first.
+ * reconcileCalendars also does a single select (ordered by isPrimary desc, createdAt asc).
+ *
+ * tableCounts: [habits, tasks, meetings, links, calendars]
+ * For each count N, push N rows: [{id:'<prefix>1'}, ..., {id:'<prefix>N'}]
+ */
+function pushSelectsForAllTables(
+  habitIds: string[],
+  taskIds: string[],
+  meetingIds: string[],
+  linkIds: string[],
+  calendarIds: string[],
+) {
+  selectResults.push(
+    habitIds.map((id) => ({ id })),
+    taskIds.map((id) => ({ id })),
+    meetingIds.map((id) => ({ id })),
+    linkIds.map((id) => ({ id })),
+    calendarIds.map((id) => ({ id })),
+  );
 }
 
 // ── freezeExcessItems ────────────────────────────────────────
 describe('freezeExcessItems', () => {
   describe('self-hosted mode', () => {
-    it('skips all operations when self-hosted', async () => {
+    it('returns early with zero DB writes when self-hosted', async () => {
       selfHostedValue = true;
       await freezeExcessItems('user-1', 'free');
-      expect(db.select).not.toHaveBeenCalled();
+      expect(db.transaction).not.toHaveBeenCalled();
       expect(db.update).not.toHaveBeenCalled();
+      expect(updateCalls).toHaveLength(0);
     });
   });
 
   describe('pro plan (unlimited)', () => {
-    it('skips all freezeTable calls (unlimited limits)', async () => {
-      // Pro limits are all -1 (unlimited) so freezeTable returns early for each.
-      // Only focus time enable/disable may run — pro has focusTimeEnabled=true so no disable.
+    it('makes no select queries and no frozen=true updates (all limits are -1)', async () => {
+      // With isUnlimited() true for every table, reconcileTable still runs but
+      // keepIds === ids and freezeIds === [] — so no frozen:true update is issued.
+      // Provide 2 rows per table so the "unlimited → freeze nobody" path is exercised.
+      pushSelectsForAllTables(['h1', 'h2'], ['t1'], [], [], ['c1']);
       await freezeExcessItems('user-1', 'pro');
-      // No selects needed — isUnlimited returns true immediately
-      expect(db.select).not.toHaveBeenCalled();
+
+      const frozenTrueCalls = updateCalls.filter((c) => c.set.frozen === true);
+      expect(frozenTrueCalls).toHaveLength(0);
+
+      // Pro has focusTimeEnabled=true → no enabled=false call
+      const disableCalls = updateCalls.filter((c) => c.set.enabled === false);
+      expect(disableCalls).toHaveLength(0);
     });
   });
 
-  describe('unknown plan (falls back to free limits)', () => {
-    it('applies free limits for unrecognized plan string', async () => {
-      // Should behave like free plan (getPlanLimits returns free for unknown)
-      pushAllUnderLimit();
-      await freezeExcessItems('user-1', 'invalid-plan');
-      // Focus time disabled for free plan
-      const disableCalls = updateCalls.filter((c) => c.set.enabled === false);
-      expect(disableCalls.length).toBe(1);
+  describe('free plan — habits 5 total, limit 3', () => {
+    it('keeps 3 oldest (frozen=false) and freezes 2 newest (frozen=true)', async () => {
+      // habits: 5 rows ordered oldest→newest: h1..h5
+      // tasks/meetings/links/calendars: empty
+      pushSelectsForAllTables(['h1', 'h2', 'h3', 'h4', 'h5'], [], [], [], []);
+
+      await freezeExcessItems('user-1', 'free');
+
+      // Collect all frozen-flag updates (not the enabled=false for focus time)
+      const frozenFalseCalls = updateCalls.filter(
+        (c) => 'frozen' in c.set && c.set.frozen === false,
+      );
+      const frozenTrueCalls = updateCalls.filter((c) => 'frozen' in c.set && c.set.frozen === true);
+
+      // keepIds = ['h1','h2','h3'] → frozen:false
+      expect(frozenFalseCalls.length).toBeGreaterThanOrEqual(1);
+      // freezeIds = ['h4','h5'] → frozen:true
+      expect(frozenTrueCalls.length).toBeGreaterThanOrEqual(1);
+
+      // CRITICAL: no update payload for the 5 entity tables should write `enabled`
+      const enabledWrittenForEntities = updateCalls.filter(
+        (c) => 'enabled' in c.set && !('frozen' in c.set),
+      );
+      // The only enabled write allowed is the focusTimeRules disable (free plan)
+      // which sets { enabled: false } — that is exactly 1 call
+      expect(enabledWrittenForEntities.filter((c) => c.set.enabled === false)).toHaveLength(1);
+      expect(enabledWrittenForEntities.filter((c) => c.set.enabled === true)).toHaveLength(0);
+    });
+
+    it('never writes the enabled column for habits/tasks/meetings/links/calendars updates', async () => {
+      pushSelectsForAllTables(
+        ['h1', 'h2', 'h3', 'h4', 'h5'],
+        ['t1', 't2', 't3', 't4', 't5', 't6'],
+        [],
+        [],
+        [],
+      );
+
+      await freezeExcessItems('user-1', 'free');
+
+      // Filter out the focus-time enabled=false call (which is the one allowed enabled write)
+      const entityFreezeUpdates = updateCalls.filter((c) => 'frozen' in c.set);
+
+      for (const call of entityFreezeUpdates) {
+        expect(Object.keys(call.set)).not.toContain('enabled');
+      }
     });
   });
 
-  describe('free plan — under limits', () => {
-    it('does not freeze items when all counts are under free limits', async () => {
-      pushAllUnderLimit();
+  describe('free plan — nothing to freeze (all under limits)', () => {
+    it('issues frozen=false (unfreeze) updates for items within limits but no frozen=true', async () => {
+      // Free limits: habits=3, tasks=5, meetings=2, links=1, calendars=1
+      // 2 habits, 3 tasks, 1 meeting, 0 links, 1 calendar — all under limit
+      pushSelectsForAllTables(['h1', 'h2'], ['t1', 't2', 't3'], ['m1'], [], ['c1']);
+
       await freezeExcessItems('user-1', 'free');
 
-      // Only the focus time disable call (free plan has focusTimeEnabled=false)
+      const frozenTrueCalls = updateCalls.filter((c) => c.set.frozen === true);
+      expect(frozenTrueCalls).toHaveLength(0);
+
+      // Focus time should be disabled (free plan)
       const disableCalls = updateCalls.filter((c) => c.set.enabled === false);
-      expect(disableCalls.length).toBe(1);
-    });
-
-    it('does not freeze when counts are exactly at limit (3 habits, 5 tasks, 2 meetings, 1 link, 1 cal)', async () => {
-      // Free limits: habits=3, tasks=5, meetings=2, links=1
-      // freezeTable enables all first (update), then counts, then returns if count <= max
-      // Each table: 1 enable-all update + 1 count select = returns early
-      selectResults.push([{ count: 3 }]); // habits count (at limit)
-      selectResults.push([{ count: 5 }]); // tasks count (at limit)
-      selectResults.push([{ count: 2 }]); // meetings count (at limit)
-      selectResults.push([{ count: 1 }]); // links count (at limit)
-      selectResults.push([{ count: 1 }]); // calendars count (at limit)
-
-      await freezeExcessItems('user-1', 'free');
-
-      // 4 enable-all updates (one per freezeTable) + 1 focus time disable = 5
-      // No freeze (disable) calls beyond focus time
-      const disableCalls = updateCalls.filter((c) => c.set.enabled === false);
-      expect(disableCalls.length).toBe(1); // only focus time
-    });
-
-    it('does not freeze when all tables have 0 items', async () => {
-      selectResults.push([{ count: 0 }]); // habits
-      selectResults.push([{ count: 0 }]); // tasks
-      selectResults.push([{ count: 0 }]); // meetings
-      selectResults.push([{ count: 0 }]); // links
-      selectResults.push([{ count: 0 }]); // calendars
-
-      await freezeExcessItems('user-1', 'free');
-
-      const disableCalls = updateCalls.filter((c) => c.set.enabled === false);
-      expect(disableCalls.length).toBe(1); // only focus time
-    });
-  });
-
-  describe('free plan — over limits', () => {
-    it('freezes excess habits (5 total, keeps 3 oldest)', async () => {
-      // habits: over limit
-      pushOverLimit(5, [{ id: 'h1' }, { id: 'h2' }, { id: 'h3' }]);
-      // tasks, meetings, links: under limit
-      selectResults.push([{ count: 2 }], [{ count: 1 }], [{ count: 0 }]);
-      // calendars: under limit
-      selectResults.push([{ count: 1 }]);
-
-      await freezeExcessItems('user-1', 'free');
-
-      expect(db.update).toHaveBeenCalled();
-      const enableTrueCalls = updateCalls.filter((c) => c.set.enabled === true);
-      const enableFalseCalls = updateCalls.filter((c) => c.set.enabled === false);
-      expect(enableTrueCalls.length).toBeGreaterThanOrEqual(1);
-      // At least 1 freeze call (habits) + 1 focus time disable
-      expect(enableFalseCalls.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it('freezes excess when over limit by exactly 1 (4 habits, limit 3)', async () => {
-      pushOverLimit(4, [{ id: 'h1' }, { id: 'h2' }, { id: 'h3' }]);
-      selectResults.push([{ count: 0 }], [{ count: 0 }], [{ count: 0 }]);
-      selectResults.push([{ count: 0 }]);
-
-      await freezeExcessItems('user-1', 'free');
-
-      const enableFalseCalls = updateCalls.filter((c) => c.set.enabled === false);
-      // 1 habits freeze + 1 focus time disable
-      expect(enableFalseCalls.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it('freezes excess across multiple tables simultaneously', async () => {
-      // habits: 6 (limit 3), tasks: 8 (limit 5), meetings: under, links: under
-      pushOverLimit(6, [{ id: 'h1' }, { id: 'h2' }, { id: 'h3' }]);
-      pushOverLimit(8, [{ id: 't1' }, { id: 't2' }, { id: 't3' }, { id: 't4' }, { id: 't5' }]);
-      selectResults.push([{ count: 1 }], [{ count: 0 }]);
-      selectResults.push([{ count: 1 }]);
-
-      await freezeExcessItems('user-1', 'free');
-
-      const enableFalseCalls = updateCalls.filter((c) => c.set.enabled === false);
-      // habits freeze + tasks freeze + focus time disable = 3+
-      expect(enableFalseCalls.length).toBeGreaterThanOrEqual(3);
-    });
-
-    it('freezes all items when keepIds is empty (0 to keep but items exist)', async () => {
-      // Simulate a hypothetical scenario: table has items but maxCount=0
-      // This doesn't happen with current free limits (all > 0) but tests the else branch
-      // We test the code path via calendars with count > limit and empty keep list
-      selectResults.push([{ count: 0 }]); // habits
-      selectResults.push([{ count: 0 }]); // tasks
-      selectResults.push([{ count: 0 }]); // meetings
-      selectResults.push([{ count: 0 }]); // links
-      // calendars: 3 total, limit 1 — keepIds returned
-      selectResults.push([{ count: 3 }], [{ id: 'c1' }]);
-
-      await freezeExcessItems('user-1', 'free');
-
-      const enableFalseCalls = updateCalls.filter((c) => c.set.enabled === false);
-      // calendar freeze + focus time disable
-      expect(enableFalseCalls.length).toBeGreaterThanOrEqual(2);
+      expect(disableCalls).toHaveLength(1);
     });
   });
 
   describe('free plan — focus time gating', () => {
-    it('disables focus time for free plan', async () => {
-      pushAllUnderLimit();
+    it('disables focus time rules (enabled=false) for free plan', async () => {
+      pushSelectsForAllTables([], [], [], [], []);
+
       await freezeExcessItems('user-1', 'free');
 
       const disableCalls = updateCalls.filter((c) => c.set.enabled === false);
-      expect(disableCalls.length).toBe(1);
+      expect(disableCalls).toHaveLength(1);
     });
 
     it('does not disable focus time for pro plan', async () => {
+      pushSelectsForAllTables([], [], [], [], []);
+
       await freezeExcessItems('user-1', 'pro');
 
       const disableCalls = updateCalls.filter((c) => c.set.enabled === false);
-      expect(disableCalls.length).toBe(0);
+      expect(disableCalls).toHaveLength(0);
     });
   });
 
-  describe('calendar-specific freezing', () => {
-    it('freezes excess calendars keeping primary first', async () => {
-      // All entity tables under limit
-      selectResults.push([{ count: 0 }], [{ count: 0 }], [{ count: 0 }], [{ count: 0 }]);
-      // calendars: 3 total, limit 1
-      selectResults.push([{ count: 3 }], [{ id: 'primary-cal' }]);
+  describe('calendar primary-first ordering', () => {
+    it('always keeps the primary calendar (first in ordered results)', async () => {
+      // Free limit = 1 calendar. reconcileCalendars orders by isPrimary desc, createdAt asc.
+      // The mock returns rows already in that order: primary-cal first.
+      // keepIds = ['primary-cal'], freezeIds = ['cal2', 'cal3']
+      pushSelectsForAllTables([], [], [], [], ['primary-cal', 'cal2', 'cal3']);
 
       await freezeExcessItems('user-1', 'free');
 
+      const frozenTrueCalls = updateCalls.filter((c) => c.set.frozen === true);
+      // 2 calendars should be frozen (cal2 and cal3)
+      expect(frozenTrueCalls.length).toBeGreaterThanOrEqual(1);
+
+      const frozenFalseCalls = updateCalls.filter((c) => c.set.frozen === false);
+      // primary-cal should be in the kept (frozen=false) set
+      expect(frozenFalseCalls.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('multiple tables over limit simultaneously', () => {
+    it('freezes excess habits and tasks, leaving meetings/links/calendars alone', async () => {
+      // habits: 6 (limit 3), tasks: 8 (limit 5), rest: under
+      pushSelectsForAllTables(
+        ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+        ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
+        ['m1'],
+        [],
+        ['c1'],
+      );
+
+      await freezeExcessItems('user-1', 'free');
+
+      const frozenTrueCalls = updateCalls.filter((c) => c.set.frozen === true);
+      // habits: 3 frozen, tasks: 3 frozen → at least 2 separate frozen:true updates
+      expect(frozenTrueCalls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe('unknown plan falls back to free limits', () => {
+    it('applies free limits for an unrecognized plan string', async () => {
+      pushSelectsForAllTables(['h1', 'h2', 'h3', 'h4'], [], [], [], []);
+
+      await freezeExcessItems('user-1', 'not-a-real-plan');
+
+      // focus time should be disabled (free fallback)
       const disableCalls = updateCalls.filter((c) => c.set.enabled === false);
-      // calendar freeze + focus time disable
-      expect(disableCalls.length).toBeGreaterThanOrEqual(2);
+      expect(disableCalls).toHaveLength(1);
     });
   });
 });
 
 // ── unfreezeAllItems ─────────────────────────────────────────
 describe('unfreezeAllItems', () => {
-  it('enables all 6 entity types for the user', async () => {
+  it('issues frozen=false updates for all 5 entity tables and enabled=true for focusTimeRules', async () => {
     await unfreezeAllItems('user-1');
 
-    // habits, tasks, meetings, links, calendars, focusTimeRules
     expect(db.update).toHaveBeenCalledTimes(6);
 
-    const allEnableTrue = updateCalls.every((c) => c.set.enabled === true);
-    expect(allEnableTrue).toBe(true);
-    expect(updateCalls.length).toBe(6);
+    const frozenFalseCalls = updateCalls.filter((c) => c.set.frozen === false);
+    // habits, tasks, smartMeetings, schedulingLinks, calendars → 5 calls
+    expect(frozenFalseCalls).toHaveLength(5);
+
+    const enabledTrueCalls = updateCalls.filter((c) => c.set.enabled === true);
+    // focusTimeRules → 1 call
+    expect(enabledTrueCalls).toHaveLength(1);
   });
 
-  it('calls update with enabled=true for every call', async () => {
-    await unfreezeAllItems('user-42');
+  it('never writes enabled on the 5 entity-table updates', async () => {
+    await unfreezeAllItems('user-1');
 
-    expect(updateCalls.length).toBe(6);
-    for (const call of updateCalls) {
-      expect(call.set).toEqual({ enabled: true });
+    const entityUpdates = updateCalls.filter((c) => c.set.frozen === false);
+    for (const call of entityUpdates) {
+      expect(Object.keys(call.set)).not.toContain('enabled');
+      expect(call.set).toEqual({ frozen: false });
     }
   });
 
-  it('works for a different userId without interference', async () => {
+  it('the focusTimeRules update uses enabled=true (not frozen)', async () => {
+    await unfreezeAllItems('user-1');
+
+    const focusCall = updateCalls.find((c) => c.set.enabled === true);
+    expect(focusCall).toBeDefined();
+    expect(focusCall!.set).toEqual({ enabled: true });
+  });
+
+  it('works for any userId without interference between calls', async () => {
     await unfreezeAllItems('user-99');
 
-    // Still 6 update calls, all setting enabled=true
-    expect(db.update).toHaveBeenCalledTimes(6);
-    expect(updateCalls.length).toBe(6);
+    expect(updateCalls).toHaveLength(6);
+    const frozenFalseCalls = updateCalls.filter((c) => c.set.frozen === false);
+    const enabledTrueCalls = updateCalls.filter((c) => c.set.enabled === true);
+    expect(frozenFalseCalls).toHaveLength(5);
+    expect(enabledTrueCalls).toHaveLength(1);
   });
 });

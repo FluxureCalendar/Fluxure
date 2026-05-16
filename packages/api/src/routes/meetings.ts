@@ -49,6 +49,7 @@ router.get(
         conferenceType: smartMeetings.conferenceType,
         skipBuffer: smartMeetings.skipBuffer,
         enabled: smartMeetings.enabled,
+        frozen: smartMeetings.frozen,
         calendarId: smartMeetings.calendarId,
         userId: smartMeetings.userId,
         color: smartMeetings.color,

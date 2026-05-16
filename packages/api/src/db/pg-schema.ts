@@ -56,6 +56,7 @@ export const users = pgTable(
     planPeriodEnd: timestamp('plan_period_end', { withTimezone: true, mode: 'string' }),
     billingInterval: text('billing_interval'),
     paymentStatus: text('payment_status'),
+    trialWarningStage: integer('trial_warning_stage').default(0).notNull(),
     onboardingCompleted: boolean('onboarding_completed').default(false).notNull(),
     gdprConsentAt: timestamp('gdpr_consent_at', { withTimezone: true, mode: 'string' }),
     consentVersion: text('consent_version'),
@@ -154,6 +155,7 @@ export const calendars = pgTable(
     color: text('color').default('#4285f4').notNull(),
     mode: calendarModeEnum('mode').default('writable').notNull(),
     enabled: boolean('enabled').default(true).notNull(),
+    frozen: boolean('frozen').default(false).notNull(),
     isPrimary: boolean('is_primary').default(false).notNull(),
     syncToken: text('sync_token'),
     watchChannelId: text('watch_channel_id'),
@@ -198,6 +200,7 @@ export const habits = pgTable(
     autoDecline: boolean('auto_decline').default(false).notNull(),
     dependsOn: text('depends_on'),
     enabled: boolean('enabled').default(true).notNull(),
+    frozen: boolean('frozen').default(false).notNull(),
     skipBuffer: boolean('skip_buffer').default(false).notNull(),
     notifications: boolean('notifications').default(false).notNull(),
     calendarId: uuid('calendar_id').references(() => calendars.id, { onDelete: 'set null' }),
@@ -240,6 +243,7 @@ export const tasks = pgTable(
     isUpNext: boolean('is_up_next').default(false).notNull(),
     skipBuffer: boolean('skip_buffer').default(false).notNull(),
     enabled: boolean('enabled').default(true).notNull(),
+    frozen: boolean('frozen').default(false).notNull(),
     calendarId: uuid('calendar_id').references(() => calendars.id, { onDelete: 'set null' }),
     color: text('color'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -280,6 +284,7 @@ export const smartMeetings = pgTable(
     conferenceType: text('conference_type'),
     skipBuffer: boolean('skip_buffer').default(false).notNull(),
     enabled: boolean('enabled').default(true).notNull(),
+    frozen: boolean('frozen').default(false).notNull(),
     calendarId: uuid('calendar_id').references(() => calendars.id, { onDelete: 'set null' }),
     color: text('color'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -573,6 +578,7 @@ export const schedulingLinks = pgTable(
     schedulingHours: schedulingHoursEnum('scheduling_hours'),
     priority: integer('priority').default(3),
     enabled: boolean('enabled').default(true).notNull(),
+    frozen: boolean('frozen').default(false).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .defaultNow()
       .notNull(),

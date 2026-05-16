@@ -110,6 +110,7 @@ export interface Habit {
   autoDecline: boolean;
   dependsOn: string | null; // habit ID
   enabled: boolean;
+  frozen: boolean;
   skipBuffer: boolean;
   /** UI/API-only — not used by the scheduling engine */
   notifications: boolean;
@@ -142,6 +143,7 @@ export interface Task {
   isUpNext: boolean;
   skipBuffer: boolean;
   enabled: boolean;
+  frozen: boolean;
   calendarId?: string;
   color?: string;
   createdAt: string;
@@ -164,6 +166,7 @@ export interface SmartMeeting {
   conferenceType: ConferenceType;
   skipBuffer: boolean;
   enabled: boolean;
+  frozen: boolean;
   calendarId?: string;
   color?: string;
   createdAt: string;
@@ -194,6 +197,7 @@ export interface SchedulingLink {
   schedulingHours: SchedulingHours;
   priority: Priority;
   enabled: boolean;
+  frozen: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -205,6 +209,7 @@ export interface Calendar {
   color: string;
   mode: CalendarMode;
   enabled: boolean;
+  frozen: boolean;
   isPrimary: boolean;
   syncToken: string | null;
 }

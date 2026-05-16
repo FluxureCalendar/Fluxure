@@ -42,6 +42,11 @@ function migrationV1(): Migration {
       EXCEPTION WHEN duplicate_object THEN NULL;
       END $$;
 
+      DO $$ BEGIN
+        CREATE TYPE event_status_enum AS ENUM ('free', 'busy', 'locked', 'completed');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$;
+
       -- ============================================================
       -- Users
       -- ============================================================
@@ -62,6 +67,7 @@ function migrationV1(): Migration {
         plan_period_end TIMESTAMPTZ,
         billing_interval TEXT,
         payment_status TEXT,
+        trial_warning_stage INTEGER NOT NULL DEFAULT 0,
         onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE,
         gdpr_consent_at TIMESTAMPTZ,
         consent_version TEXT,
@@ -124,6 +130,7 @@ function migrationV1(): Migration {
         color TEXT NOT NULL DEFAULT '#4285f4',
         mode calendar_mode_enum NOT NULL DEFAULT 'writable',
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        frozen BOOLEAN NOT NULL DEFAULT FALSE,
         is_primary BOOLEAN NOT NULL DEFAULT FALSE,
         sync_token TEXT,
         watch_channel_id TEXT,
@@ -157,6 +164,7 @@ function migrationV1(): Migration {
         auto_decline BOOLEAN NOT NULL DEFAULT FALSE,
         depends_on TEXT,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        frozen BOOLEAN NOT NULL DEFAULT FALSE,
         skip_buffer BOOLEAN NOT NULL DEFAULT FALSE,
         notifications BOOLEAN NOT NULL DEFAULT FALSE,
         calendar_id UUID REFERENCES calendars(id) ON DELETE SET NULL,
@@ -188,6 +196,7 @@ function migrationV1(): Migration {
         is_up_next BOOLEAN NOT NULL DEFAULT FALSE,
         skip_buffer BOOLEAN NOT NULL DEFAULT FALSE,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        frozen BOOLEAN NOT NULL DEFAULT FALSE,
         calendar_id UUID REFERENCES calendars(id) ON DELETE SET NULL,
         color TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -217,6 +226,7 @@ function migrationV1(): Migration {
         conference_type TEXT,
         skip_buffer BOOLEAN NOT NULL DEFAULT FALSE,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        frozen BOOLEAN NOT NULL DEFAULT FALSE,
         calendar_id UUID REFERENCES calendars(id) ON DELETE SET NULL,
         color TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -272,7 +282,7 @@ function migrationV1(): Migration {
         calendar_id UUID REFERENCES calendars(id) ON DELETE SET NULL,
         start TIMESTAMPTZ NOT NULL,
         "end" TIMESTAMPTZ NOT NULL,
-        status TEXT DEFAULT 'free',
+        status event_status_enum DEFAULT 'free',
         is_all_day BOOLEAN NOT NULL DEFAULT FALSE,
         alternative_slots_count INTEGER,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -424,6 +434,7 @@ function migrationV1(): Migration {
         scheduling_hours scheduling_hours_enum,
         priority INTEGER DEFAULT 3,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        frozen BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
@@ -440,31 +451,8 @@ function migrationV1(): Migration {
   };
 }
 
-function migrationV2(): Migration {
-  return {
-    version: 2,
-    description: 'Convert scheduled_events.status from TEXT to event_status_enum',
-    sql: `
-      -- Create the event_status_enum type
-      DO $$ BEGIN
-        CREATE TYPE event_status_enum AS ENUM ('free', 'busy', 'locked', 'completed');
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$;
-
-      -- Convert existing text column to use the enum
-      ALTER TABLE scheduled_events
-        ALTER COLUMN status TYPE event_status_enum
-        USING status::event_status_enum;
-
-      -- Re-apply the default
-      ALTER TABLE scheduled_events
-        ALTER COLUMN status SET DEFAULT 'free'::event_status_enum;
-    `,
-  };
-}
-
 function getAllMigrations(): Migration[] {
-  return [migrationV1(), migrationV2()];
+  return [migrationV1()];
 }
 
 /**

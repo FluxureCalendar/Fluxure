@@ -38,6 +38,7 @@ export function toHabit(row: HabitRow): Habit {
     autoDecline: !!row.autoDecline,
     dependsOn: row.dependsOn ?? null,
     enabled: row.enabled !== false,
+    frozen: !!row.frozen,
     skipBuffer: !!row.skipBuffer,
     notifications: !!row.notifications,
     // null→undefined coercion for optional fields (DB stores null, type expects undefined)
@@ -64,6 +65,7 @@ export function toTask(row: TaskRow): Task {
     isUpNext: !!row.isUpNext,
     skipBuffer: !!row.skipBuffer,
     enabled: row.enabled !== false,
+    frozen: !!row.frozen,
     calendarId: row.calendarId ?? undefined,
     color: row.color ?? undefined,
     createdAt: row.createdAt,
@@ -86,6 +88,7 @@ export function toMeeting(row: MeetingRow): SmartMeeting {
     conferenceType: (row.conferenceType ?? 'none') as ConferenceType,
     skipBuffer: !!row.skipBuffer,
     enabled: row.enabled !== false,
+    frozen: !!row.frozen,
     calendarId: row.calendarId ?? undefined,
     color: row.color ?? undefined,
     createdAt: row.createdAt,

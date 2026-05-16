@@ -1,4 +1,4 @@
-import { eq, and, notInArray, count, desc } from 'drizzle-orm';
+import { eq, and, inArray, asc, desc } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
 import {
   habits,
@@ -14,23 +14,36 @@ import { isSelfHosted } from '../config.js';
 
 const log = createLogger('freeze');
 
+type LimitedTable = typeof habits | typeof tasks | typeof smartMeetings | typeof schedulingLinks;
+
 /**
- * Freeze excess items when a user downgrades.
- * Keeps the oldest items (by createdAt) active, freezes the rest.
+ * Reconcile which of a user's items are active for the given plan.
+ * The oldest items (by createdAt) up to the plan limit stay active; the rest
+ * are frozen. The user's own enabled/paused state is never modified.
  */
 export async function freezeExcessItems(userId: string, plan: string): Promise<void> {
-  // Self-hosted users always have Pro limits — nothing to freeze
   if (isSelfHosted()) return;
 
   const limits = getPlanLimits(plan);
 
-  await freezeTable(userId, habits, limits.maxHabits, 'habits');
-  await freezeTable(userId, tasks, limits.maxTasks, 'tasks');
-  await freezeTable(userId, smartMeetings, limits.maxMeetings, 'meetings');
-  await freezeTable(userId, schedulingLinks, limits.maxSchedulingLinks, 'scheduling-links');
-  await freezeCalendars(userId, limits.maxCalendars);
+  await reconcileTable(userId, habits, limits.maxHabits, asc(habits.createdAt), 'habits');
+  await reconcileTable(userId, tasks, limits.maxTasks, asc(tasks.createdAt), 'tasks');
+  await reconcileTable(
+    userId,
+    smartMeetings,
+    limits.maxMeetings,
+    asc(smartMeetings.createdAt),
+    'meetings',
+  );
+  await reconcileTable(
+    userId,
+    schedulingLinks,
+    limits.maxSchedulingLinks,
+    asc(schedulingLinks.createdAt),
+    'scheduling-links',
+  );
+  await reconcileCalendars(userId, limits.maxCalendars);
 
-  // Disable focus time entirely for plans that don't include it
   if (!limits.focusTimeEnabled) {
     await db
       .update(focusTimeRules)
@@ -40,115 +53,81 @@ export async function freezeExcessItems(userId: string, plan: string): Promise<v
   }
 }
 
-/**
- * Unfreeze all items when a user upgrades.
- */
+/** Clear the frozen flag on every limited item for this user (used on upgrade). */
 export async function unfreezeAllItems(userId: string): Promise<void> {
   await Promise.all([
-    db
-      .update(habits)
-      .set({ enabled: true })
-      .where(and(eq(habits.userId, userId), eq(habits.enabled, false))),
-    db
-      .update(tasks)
-      .set({ enabled: true })
-      .where(and(eq(tasks.userId, userId), eq(tasks.enabled, false))),
-    db
-      .update(smartMeetings)
-      .set({ enabled: true })
-      .where(and(eq(smartMeetings.userId, userId), eq(smartMeetings.enabled, false))),
-    db
-      .update(schedulingLinks)
-      .set({ enabled: true })
-      .where(and(eq(schedulingLinks.userId, userId), eq(schedulingLinks.enabled, false))),
-    db
-      .update(calendars)
-      .set({ enabled: true })
-      .where(and(eq(calendars.userId, userId), eq(calendars.enabled, false))),
+    db.update(habits).set({ frozen: false }).where(eq(habits.userId, userId)),
+    db.update(tasks).set({ frozen: false }).where(eq(tasks.userId, userId)),
+    db.update(smartMeetings).set({ frozen: false }).where(eq(smartMeetings.userId, userId)),
+    db.update(schedulingLinks).set({ frozen: false }).where(eq(schedulingLinks.userId, userId)),
+    db.update(calendars).set({ frozen: false }).where(eq(calendars.userId, userId)),
     db
       .update(focusTimeRules)
       .set({ enabled: true })
       .where(and(eq(focusTimeRules.userId, userId), eq(focusTimeRules.enabled, false))),
   ]);
-  log.info({ userId }, 'Unfroze all items');
+  log.info({ userId }, 'Cleared frozen state for all items');
 }
 
-async function freezeTable(
+async function reconcileTable(
   userId: string,
-  table: typeof habits | typeof tasks | typeof smartMeetings | typeof schedulingLinks,
+  table: LimitedTable,
   maxCount: number,
+  order: ReturnType<typeof asc>,
   label: string,
 ): Promise<void> {
-  if (isUnlimited(maxCount)) return;
-
   await db.transaction(async (tx) => {
-    // First, enable all items so we start fresh
-    await tx.update(table).set({ enabled: true }).where(eq(table.userId, userId));
-
-    // Count total
-    const [{ count: totalCount }] = await tx
-      .select({ count: count() })
-      .from(table)
-      .where(eq(table.userId, userId));
-
-    if (totalCount <= maxCount) return;
-
-    // Get IDs of items to KEEP (oldest first, up to limit)
-    const toKeep = await tx
+    const rows = await tx
       .select({ id: table.id })
       .from(table)
       .where(eq(table.userId, userId))
-      .orderBy(table.createdAt)
-      .limit(maxCount);
+      .orderBy(order);
 
-    const keepIds = toKeep.map((r) => r.id);
+    const ids = rows.map((r) => r.id);
+    const keepIds = isUnlimited(maxCount) ? ids : ids.slice(0, maxCount);
+    const freezeIds = isUnlimited(maxCount) ? [] : ids.slice(maxCount);
 
-    // Freeze everything NOT in the keep list
     if (keepIds.length > 0) {
       await tx
         .update(table)
-        .set({ enabled: false })
-        .where(and(eq(table.userId, userId), notInArray(table.id, keepIds)));
-    } else {
-      await tx.update(table).set({ enabled: false }).where(eq(table.userId, userId));
+        .set({ frozen: false })
+        .where(and(eq(table.userId, userId), inArray(table.id, keepIds)));
     }
-
-    log.info({ userId, label, frozen: totalCount - maxCount }, 'Froze excess items');
+    if (freezeIds.length > 0) {
+      await tx
+        .update(table)
+        .set({ frozen: true })
+        .where(and(eq(table.userId, userId), inArray(table.id, freezeIds)));
+      log.info({ userId, label, frozen: freezeIds.length }, 'Froze excess items');
+    }
   });
 }
 
-/**
- * Freeze excess calendars when a user downgrades.
- * Keeps the primary calendar, then fills remaining slots with other enabled calendars.
- */
-async function freezeCalendars(userId: string, maxCount: number): Promise<void> {
-  if (isUnlimited(maxCount)) return;
+/** Calendars keep the primary first, then oldest, up to the limit. */
+async function reconcileCalendars(userId: string, maxCount: number): Promise<void> {
+  await db.transaction(async (tx) => {
+    const rows = await tx
+      .select({ id: calendars.id })
+      .from(calendars)
+      .where(eq(calendars.userId, userId))
+      .orderBy(desc(calendars.isPrimary), asc(calendars.createdAt));
 
-  const [{ count: totalCount }] = await db
-    .select({ count: count() })
-    .from(calendars)
-    .where(eq(calendars.userId, userId));
+    const ids = rows.map((r) => r.id);
+    const keepIds = isUnlimited(maxCount) ? ids : ids.slice(0, maxCount);
+    const freezeIds = isUnlimited(maxCount) ? [] : ids.slice(maxCount);
 
-  if (totalCount <= maxCount) return;
-
-  // Keep primary calendar first, then fill remaining slots
-  const toKeep = await db
-    .select({ id: calendars.id })
-    .from(calendars)
-    .where(eq(calendars.userId, userId))
-    .orderBy(desc(calendars.isPrimary))
-    .limit(maxCount);
-
-  const keepIds = toKeep.map((r) => r.id);
-
-  if (keepIds.length > 0) {
-    await db
-      .update(calendars)
-      .set({ enabled: false })
-      .where(and(eq(calendars.userId, userId), notInArray(calendars.id, keepIds)));
-  } else {
-    await db.update(calendars).set({ enabled: false }).where(eq(calendars.userId, userId));
-  }
-
-  log.info({ userId, frozen: totalCount - maxCount }, 'Froze excess calendars');
+    if (keepIds.length > 0) {
+      await tx
+        .update(calendars)
+        .set({ frozen: false })
+        .where(and(eq(calendars.userId, userId), inArray(calendars.id, keepIds)));
+    }
+    if (freezeIds.length > 0) {
+      await tx
+        .update(calendars)
+        .set({ frozen: true })
+        .where(and(eq(calendars.userId, userId), inArray(calendars.id, freezeIds)));
+      log.info({ userId, frozen: freezeIds.length }, 'Froze excess calendars');
+    }
+  });
 }

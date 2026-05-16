@@ -61,6 +61,7 @@ router.get(
         schedulingHours: schedulingLinks.schedulingHours,
         priority: schedulingLinks.priority,
         enabled: schedulingLinks.enabled,
+        frozen: schedulingLinks.frozen,
         userId: schedulingLinks.userId,
         createdAt: schedulingLinks.createdAt,
         updatedAt: schedulingLinks.updatedAt,
@@ -521,6 +522,7 @@ function toLink(row: typeof schedulingLinks.$inferSelect): SchedulingLink {
     schedulingHours: (row.schedulingHours ?? 'working') as SchedulingLink['schedulingHours'],
     priority: row.priority ?? 3,
     enabled: row.enabled ?? true,
+    frozen: !!row.frozen,
     createdAt: row.createdAt ?? '',
     updatedAt: row.updatedAt ?? '',
   };
