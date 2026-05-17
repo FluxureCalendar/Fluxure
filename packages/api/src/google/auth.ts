@@ -23,6 +23,31 @@ export function createOAuth2Client(): OAuth2Client {
 }
 
 /**
+ * OAuth scopes requested for Google sign-in + Calendar integration.
+ *
+ * Deliberately minimal (principle of least privilege; also eases Google's
+ * sensitive-scope verification review):
+ *   - openid/email/profile           identity for sign-in
+ *   - calendar.events                read/write events — covers events.list/
+ *                                    insert/patch/delete/watch and channels.stop,
+ *                                    and is sufficient for conflict/busy detection
+ *   - calendar.calendarlist.readonly read-only enumeration of the user's
+ *                                    calendars (calendarList.list)
+ *
+ * The broad `auth/calendar` scope is intentionally NOT requested: it grants
+ * calendar deletion, ACL and settings management that Fluxure never uses.
+ *
+ * Single source of truth — do not inline this list at any other call site.
+ */
+export const GOOGLE_OAUTH_SCOPES = [
+  'openid',
+  'email',
+  'profile',
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+] as const;
+
+/**
  * Generate the Google OAuth2 consent screen URL.
  * Requests offline access so we receive a refresh token.
  * Accepts an optional `state` parameter for CSRF protection.
@@ -31,13 +56,7 @@ export function getAuthUrl(oauth2Client: OAuth2Client, state?: string): string {
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
-    scope: [
-      'openid',
-      'email',
-      'profile',
-      'https://www.googleapis.com/auth/calendar',
-      'https://www.googleapis.com/auth/calendar.events',
-    ],
+    scope: [...GOOGLE_OAUTH_SCOPES],
     ...(state ? { state } : {}),
   });
 }

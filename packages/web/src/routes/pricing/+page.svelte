@@ -3,7 +3,7 @@
   import { billing } from '$lib/api';
   import { getAuthState, isValidStripeUrl } from '$lib/auth.svelte';
   import { showToast } from '$lib/toast.svelte';
-  import { pageTitle } from '$lib/brand';
+  import { APP_NAME, pageTitle } from '$lib/brand';
   import Check from 'lucide-svelte/icons/check';
   import Server from 'lucide-svelte/icons/server';
   import Cloud from 'lucide-svelte/icons/cloud';
@@ -30,7 +30,7 @@
       name: 'Self-Hosted',
       price: 'Free',
       period: 'forever',
-      description: 'Run Fluxure on your own infrastructure.',
+      description: `Run ${APP_NAME} on your own infrastructure.`,
       icon: Server,
       features: [
         'Unlimited habits, tasks & meetings',
@@ -49,7 +49,7 @@
       name: 'Cloud Free',
       price: '$0',
       period: '/month',
-      description: 'Get started with Fluxure Cloud.',
+      description: `Get started with ${APP_NAME} Cloud.`,
       icon: Cloud,
       features: [
         '3 habits',
@@ -68,7 +68,7 @@
       name: 'Cloud Pro',
       price: '$9',
       period: '/month',
-      description: 'Unlock the full power of Fluxure.',
+      description: `Unlock the full power of ${APP_NAME}.`,
       icon: Zap,
       recommended: true,
       features: [

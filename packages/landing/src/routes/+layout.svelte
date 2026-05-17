@@ -3,6 +3,7 @@
   import Sun from 'lucide-svelte/icons/sun';
   import Moon from 'lucide-svelte/icons/moon';
   import { onMount } from 'svelte';
+  import { afterNavigate } from '$app/navigation';
   import { APP_NAME, TAGLINE, DESCRIPTION, APP_URL, GITHUB_URL } from '$lib/config';
   import { initTheme, toggleTheme } from '$lib/theme';
 
@@ -12,6 +13,15 @@
 
   onMount(() => {
     isDark = initTheme() === 'dark';
+  });
+
+  // Always land at the top of a freshly navigated page (e.g. footer Terms/Privacy
+  // links), overriding SvelteKit's history-based scroll restoration. Hash links
+  // (/#features, /#pricing) are left alone so anchor scrolling still works.
+  afterNavigate(({ to }) => {
+    if (to && !to.url.hash) {
+      window.scrollTo(0, 0);
+    }
   });
 
   function handleScroll() {
@@ -41,6 +51,13 @@
       },
     ],
   });
+
+  const websiteJsonLd = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: APP_NAME,
+    url: 'https://fluxure.app',
+  });
 </script>
 
 <svelte:window onscroll={handleScroll} />
@@ -49,11 +66,14 @@
   <title>{APP_NAME} — {TAGLINE}</title>
   <meta name="description" content={DESCRIPTION} />
   <meta property="og:title" content="{APP_NAME} — {TAGLINE}" />
+  <meta property="og:site_name" content={APP_NAME} />
   <meta property="og:description" content={DESCRIPTION} />
   <meta property="og:url" content="https://fluxure.app" />
   <link rel="canonical" href="https://fluxure.app" />
   <!-- eslint-disable-next-line svelte/no-at-html-tags -- trusted static JSON-LD, no user input -->
   {@html `<script type="application/ld+json">${jsonLdData}<` + '/script>'}
+  <!-- eslint-disable-next-line svelte/no-at-html-tags -- trusted static JSON-LD, no user input -->
+  {@html `<script type="application/ld+json">${websiteJsonLd}<` + '/script>'}
 </svelte:head>
 
 <div class="layout">
@@ -93,14 +113,17 @@
           <img src="/logo-mark.svg" alt="" width="24" height="24" />
           <span class="footer-name">fluxure</span>
         </div>
-        <p class="footer-copy">&copy; {new Date().getFullYear()} {APP_NAME}</p>
+        <p class="footer-copy">
+          &copy; {new Date().getFullYear()}
+          {APP_NAME}<br />Yet another service part of the TFR Network
+        </p>
       </div>
 
       <div class="footer-links">
         <div class="footer-col">
           <span class="footer-col-title">Product</span>
           <a class="footer-link" href="/#features">Features</a>
-          <a class="footer-link" href="/pricing">Pricing</a>
+          <a class="footer-link" href="/#pricing">Pricing</a>
         </div>
         <div class="footer-col">
           <span class="footer-col-title">Legal</span>

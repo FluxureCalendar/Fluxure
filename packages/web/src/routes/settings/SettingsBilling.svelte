@@ -18,6 +18,7 @@
   import Crown from 'lucide-svelte/icons/crown';
   import Zap from 'lucide-svelte/icons/zap';
   import CreditCard from 'lucide-svelte/icons/credit-card';
+  import { APP_NAME } from '$lib/brand';
 
   type ItemType = 'habit' | 'task' | 'meeting' | 'link' | 'calendar';
 
@@ -230,10 +231,10 @@
 
       {#if status.selfHosted}
         <p class="plan-desc">
-          You have full access to all Fluxure features with your self-hosted installation.
+          You have full access to all {APP_NAME} features with your self-hosted installation.
         </p>
       {:else if status.plan === 'pro' && status.hasSubscription}
-        <p class="plan-desc">You have full access to all Fluxure features.</p>
+        <p class="plan-desc">You have full access to all {APP_NAME} features.</p>
         {#if status.periodEnd}
           <p class="period-info">
             Current period ends {new Date(status.periodEnd).toLocaleDateString(undefined, {

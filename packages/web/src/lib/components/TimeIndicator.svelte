@@ -35,7 +35,7 @@
     position: absolute;
     left: 0;
     right: 0;
-    z-index: 5;
+    z-index: 11;
     pointer-events: none;
     display: flex;
     align-items: center;

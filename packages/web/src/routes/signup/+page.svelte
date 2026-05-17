@@ -4,7 +4,7 @@
   import AuthLayout from '$lib/components/auth/AuthLayout.svelte';
   import GoogleLogo from '$lib/components/auth/GoogleLogo.svelte';
   import { googleAuth, getAuthState } from '$lib/auth.svelte';
-  import { pageTitle } from '$lib/brand';
+  import { APP_NAME, pageTitle } from '$lib/brand';
   import { BRAND } from '@fluxure/shared';
 
   let googleLoading = $state(false);
@@ -68,7 +68,7 @@
 
 <AuthLayout>
   <h2 class="auth-title">Create your account</h2>
-  <p class="auth-subtitle">Start optimizing your schedule with Fluxure</p>
+  <p class="auth-subtitle">Start optimizing your schedule with {APP_NAME}</p>
 
   {#if error}
     <div class="auth-error">{error}</div>
@@ -79,7 +79,7 @@
     <span
       >I agree to the <a href="{BRAND.landingUrl}/privacy" target="_blank" rel="noopener noreferrer"
         >Privacy Policy</a
-      > and consent to data processing as described therein.</span
+      > and data processing.</span
     >
   </label>
 
@@ -116,15 +116,19 @@
 
   .auth-consent {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
+    justify-content: center;
     gap: var(--space-2);
     font-size: 0.75rem;
+    line-height: 1.5;
+    text-align: center;
     color: var(--color-text-tertiary);
     margin-bottom: var(--space-4);
     cursor: pointer;
 
     input[type='checkbox'] {
-      margin-top: 2px;
+      width: 16px;
+      height: 16px;
       flex-shrink: 0;
       accent-color: var(--color-accent);
     }

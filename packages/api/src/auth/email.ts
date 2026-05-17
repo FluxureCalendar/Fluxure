@@ -1,7 +1,7 @@
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { BRAND } from '@fluxure/shared';
-import { SMTP_PORT, SMTP_FROM, FRONTEND_URL } from '../config.js';
+import { SMTP_PORT, SMTP_FROM, FRONTEND_URL, isSmtpInsecure } from '../config.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('email');
@@ -18,6 +18,42 @@ function escapeHtml(str: string): string {
 
 let transporter: Transporter | null = null;
 let isJsonTransport = false;
+
+export interface SmtpTransportParams {
+  host: string;
+  port: number;
+  user?: string;
+  pass?: string;
+  isProduction: boolean;
+  insecure: boolean;
+}
+
+/**
+ * Build nodemailer transport options.
+ *
+ * - `insecure` (SMTP_INSECURE=true): plaintext only — no STARTTLS, no
+ *   certificate verification. For trusted internal relays (e.g. a local
+ *   Postfix reached over the Docker network) where TLS adds nothing but a
+ *   hostname/cert mismatch breaks delivery. Never use across untrusted networks.
+ * - Otherwise, production requires STARTTLS on non-465 ports and verifies
+ *   certs; dev uses opportunistic TLS so local servers (e.g. Mailpit) work.
+ */
+export function buildSmtpTransportOptions(params: SmtpTransportParams): Record<string, unknown> {
+  const { host, port, user, pass, isProduction, insecure } = params;
+  const opts: Record<string, unknown> = {
+    host,
+    port,
+    secure: port === 465,
+    ...(insecure ? { ignoreTLS: true } : isProduction && port !== 465 ? { requireTLS: true } : {}),
+    tls: { rejectUnauthorized: isProduction && !insecure },
+  };
+
+  if (user && pass) {
+    opts.auth = { user, pass };
+  }
+
+  return opts;
+}
 
 function getTransporter(): Transporter {
   if (transporter) return transporter;
@@ -36,20 +72,14 @@ function getTransporter(): Transporter {
     return transporter;
   }
 
-  const isProduction = process.env.NODE_ENV === 'production';
-  const opts: Record<string, unknown> = {
+  const opts = buildSmtpTransportOptions({
     host,
     port,
-    secure: port === 465,
-    // In production, require STARTTLS on non-465 ports; in dev, use opportunistic TLS
-    // so local servers like Mailpit that don't support STARTTLS still work
-    ...(isProduction && port !== 465 ? { requireTLS: true } : {}),
-    tls: { rejectUnauthorized: isProduction },
-  };
-
-  if (user && pass) {
-    opts.auth = { user, pass };
-  }
+    user,
+    pass,
+    isProduction: process.env.NODE_ENV === 'production',
+    insecure: isSmtpInsecure(),
+  });
 
   transporter = nodemailer.createTransport(opts as nodemailer.TransportOptions);
 

@@ -10,6 +10,7 @@
   import LogOut from 'lucide-svelte/icons/log-out';
   import Monitor from 'lucide-svelte/icons/monitor';
   import CalendarX2 from 'lucide-svelte/icons/calendar-x-2';
+  import { APP_NAME } from '$lib/brand';
 
   const authState = getAuthState();
 
@@ -33,20 +34,18 @@
     { key: 'schedulingTemplates', label: 'Scheduling templates' },
   ] as const;
 
-  let selectedCategories: SvelteSet<string> = new SvelteSet(exportCategories.map((c) => c.key));
+  const selectedCategories = new SvelteSet<string>(exportCategories.map((c) => c.key));
 
   function toggleCategory(key: string) {
-    const next = new SvelteSet(selectedCategories);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    selectedCategories = next;
+    if (selectedCategories.has(key)) selectedCategories.delete(key);
+    else selectedCategories.add(key);
   }
 
   function toggleAll() {
     if (selectedCategories.size === exportCategories.length) {
-      selectedCategories = new SvelteSet();
+      selectedCategories.clear();
     } else {
-      selectedCategories = new SvelteSet(exportCategories.map((c) => c.key));
+      for (const c of exportCategories) selectedCategories.add(c.key);
     }
   }
   let revokingAll = $state(false);
@@ -271,8 +270,8 @@
   <div class="setting-block">
     <h4>Delete managed events</h4>
     <p class="desc">
-      Remove all Fluxure-created events from your Google Calendar. Your habits, tasks, and settings
-      will remain.
+      Remove all {APP_NAME}-created events from your Google Calendar. Your habits, tasks, and
+      settings will remain.
     </p>
     <button
       class="btn-danger"

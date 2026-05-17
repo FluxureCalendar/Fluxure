@@ -8,29 +8,22 @@
     name="description"
     content="Privacy Policy for {APP_NAME}, the intelligent calendar scheduling tool."
   />
-  <meta property="og:title" content="Privacy Policy — Fluxure" />
+  <meta property="og:title" content="Privacy Policy — {APP_NAME}" />
   <meta
     property="og:description"
-    content="Privacy Policy for Fluxure, the intelligent calendar scheduling tool."
+    content="Privacy Policy for {APP_NAME}, the intelligent calendar scheduling tool."
   />
   <link rel="canonical" href="https://fluxure.app/privacy" />
 </svelte:head>
 
 <div class="legal-page">
   <div class="legal-content">
-    <div class="legal-nav">
-      <a href="/">
-        <img src="/logo-mark.svg" alt="" width="24" height="24" />
-        <span class="legal-brand-name">fluxure</span>
-      </a>
-    </div>
-
     <h1>Privacy Policy</h1>
     <p class="legal-meta">Last updated: March 7, 2026</p>
 
     <section>
       <h2>1. Information We Collect</h2>
-      <p>We collect and process the following types of information when you use Fluxure:</p>
+      <p>We collect and process the following types of information when you use {APP_NAME}:</p>
       <ul>
         <li>
           <strong>Account information:</strong> Your name, email address, and profile avatar obtained
@@ -41,8 +34,8 @@
           rules from your connected Google Calendars
         </li>
         <li>
-          <strong>Scheduling data:</strong> Habits, tasks, meetings, focus time rules, buffer configurations,
-          and priority settings you create within Fluxure
+          <strong>Scheduling data:</strong> Habits, tasks, meetings, focus time rules, buffer
+          configurations, and priority settings you create within {APP_NAME}
         </li>
         <li>
           <strong>Activity data:</strong> Scheduling history, habit completions, schedule changes, and
@@ -85,7 +78,7 @@
     <section>
       <h2>3. Google Calendar Data</h2>
       <p>
-        Fluxure accesses your Google Calendar through Google's OAuth 2.0 authorization. The specific
+        {APP_NAME} accesses your Google Calendar through Google's OAuth 2.0 authorization. The specific
         scopes requested are:
       </p>
       <ul>
@@ -94,21 +87,21 @@
           constraints (busy times, meetings, all-day events)
         </li>
         <li>
-          <strong>Calendar write access:</strong> To create, update, and delete events that Fluxure manages
-          on your behalf (habits, tasks, focus blocks)
+          <strong>Calendar write access:</strong> To create, update, and delete events that {APP_NAME}
+          manages on your behalf (habits, tasks, focus blocks)
         </li>
       </ul>
       <p>
-        Fluxure uses incremental sync tokens to efficiently track changes to your calendar without
-        repeatedly reading all events. Your Google OAuth refresh token is encrypted with AES-256-GCM
-        before storage and is never stored in plain text.
+        {APP_NAME} uses incremental sync tokens to efficiently track changes to your calendar without
+        repeatedly reading all events. Your Google OAuth refresh token is encrypted with AES-256-GCM before
+        storage and is never stored in plain text.
       </p>
       <p>
-        You can revoke Fluxure's access at any time through your <a
-          href="https://myaccount.google.com/permissions"
-          target="_blank"
-          rel="noopener noreferrer">Google Account permissions</a
-        > or the Fluxure settings page.
+        You can revoke {APP_NAME}'s access at any time through your
+        <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer"
+          >Google Account permissions</a
+        >
+        or the {APP_NAME} settings page.
       </p>
     </section>
 
@@ -191,20 +184,22 @@
     <section>
       <h2>7. Self-Hosted Users</h2>
       <p>
-        If you are running a self-hosted instance of Fluxure, your data remains entirely on your own
-        infrastructure. We have no access to, and no responsibility for, data stored in self-hosted
-        deployments.
+        If you are running a self-hosted instance of {APP_NAME}, your data remains entirely on your
+        own infrastructure. We have no access to, and no responsibility for, data stored in
+        self-hosted deployments.
       </p>
       <p>
         Self-hosted users are responsible for their own data security, backups, and compliance with
         applicable data protection regulations. The security measures described in this policy apply
-        only to the hosted version of Fluxure.
+        only to the hosted version of {APP_NAME}.
       </p>
     </section>
 
     <section>
       <h2>8. Cookies</h2>
-      <p>Fluxure uses only strictly necessary cookies for authentication and session management:</p>
+      <p>
+        {APP_NAME} uses only strictly necessary cookies for authentication and session management:
+      </p>
       <ul>
         <li>
           <strong>Session cookie:</strong> An httpOnly, Secure cookie that maintains your authenticated
@@ -241,9 +236,9 @@
     <section>
       <h2>10. Children's Privacy</h2>
       <p>
-        Fluxure is not intended for use by anyone under the age of 16. We do not knowingly collect
-        personal data from children under 16. If we become aware that we have collected data from a
-        child under 16, we will take steps to delete that information promptly.
+        {APP_NAME} is not intended for use by anyone under the age of 16. We do not knowingly collect
+        personal data from children under 16. If we become aware that we have collected data from a child
+        under 16, we will take steps to delete that information promptly.
       </p>
     </section>
 
@@ -255,8 +250,8 @@
         email or through an in-app notification at least 30 days before the changes take effect.
       </p>
       <p>
-        Your continued use of Fluxure after the updated policy takes effect constitutes your
-        acceptance of the changes. We encourage you to review this policy periodically.
+        Your continued use of {APP_NAME} after the updated policy takes effect constitutes your acceptance
+        of the changes. We encourage you to review this policy periodically.
       </p>
     </section>
 
@@ -286,31 +281,14 @@
     min-height: 100vh;
     display: flex;
     justify-content: center;
-    padding: var(--space-8) var(--space-4);
+    // space-24 top clears the fixed 64px header (.header) + breathing room,
+    // since the brand block that used to provide this offset was removed.
+    padding: var(--space-24) var(--space-4) var(--space-8);
   }
 
   .legal-content {
     max-width: 680px;
     width: 100%;
-  }
-
-  .legal-nav {
-    margin-bottom: var(--space-8);
-
-    a {
-      display: inline-flex;
-      align-items: center;
-      gap: var(--space-3);
-      text-decoration: none;
-      color: var(--color-text);
-    }
-  }
-
-  .legal-brand-name {
-    font-family: $font-heading;
-    font-size: 1.125rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
   }
 
   h1 {

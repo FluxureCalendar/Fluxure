@@ -14,7 +14,7 @@ import {
   calendars,
   oauthStates,
 } from '../db/pg-schema.js';
-import { createOAuth2Client, GoogleCalendarClient } from '../google/index.js';
+import { createOAuth2Client, GoogleCalendarClient, GOOGLE_OAUTH_SCOPES } from '../google/index.js';
 import { encrypt, decrypt } from '../crypto.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { schedulerRegistry } from '../scheduler-registry.js';
@@ -784,13 +784,7 @@ router.get(
 
     const url = oauth2Client.generateAuthUrl({
       access_type: 'offline',
-      scope: [
-        'openid',
-        'email',
-        'profile',
-        'https://www.googleapis.com/auth/calendar',
-        'https://www.googleapis.com/auth/calendar.events',
-      ],
+      scope: [...GOOGLE_OAUTH_SCOPES],
       state,
       ...(promptParam ? { prompt: promptParam } : {}),
     });

@@ -94,6 +94,16 @@ export const SMTP_PORT = envInt('SMTP_PORT', DEFAULT_SMTP_PORT);
 /** SMTP From address. Default: Fluxure <noreply@fluxure.app> */
 export const SMTP_FROM = envStr('SMTP_FROM', `${BRAND.name} <${DEFAULT_SMTP_FROM}>`);
 
+/**
+ * When true, disable SMTP TLS entirely: no STARTTLS and no certificate
+ * verification. For trusted internal relays only (e.g. a local MTA reached
+ * over a private/Docker network where TLS adds nothing but a hostname/cert
+ * mismatch breaks delivery). Never enable across untrusted networks.
+ */
+export function isSmtpInsecure(): boolean {
+  return process.env.SMTP_INSECURE === 'true';
+}
+
 // ── Google Calendar ─────────────────────────────────────────
 
 /** Polling interval for Google Calendar sync when in polling mode (ms). Default: 60s */

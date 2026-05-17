@@ -1,0 +1,14 @@
+# Normalize line endings: store as LF in the repo, check out LF everywhere.
+* text=auto eol=lf
+
+# Shell scripts must always be LF (CRLF breaks the shebang/interpreter).
+*.sh text eol=lf
+
+# Treat known binaries as binary so Git never touches their bytes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

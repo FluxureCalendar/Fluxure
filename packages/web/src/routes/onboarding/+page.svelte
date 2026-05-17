@@ -6,7 +6,7 @@
   import { settings, habits, calendars as calendarsApi } from '$lib/api';
   import { loadCalendars, getCalendars, setCalendars } from '$lib/calendars.svelte';
   import { showToast } from '$lib/toast.svelte';
-  import { pageTitle } from '$lib/brand';
+  import { APP_NAME, pageTitle } from '$lib/brand';
   import { formatDuration } from '$lib/utils/format';
   import { Priority } from '@fluxure/shared';
   import type { DayOfWeek } from '@fluxure/shared';
@@ -293,7 +293,7 @@
       {#if step === 1}
         <div class="onboarding-step">
           <Sparkles size={36} class="onboarding-icon" />
-          <h2 class="onboarding-title">Welcome to Fluxure</h2>
+          <h2 class="onboarding-title">Welcome to {APP_NAME}</h2>
           <p class="onboarding-description">
             Let's set up your account in a few quick steps. We'll connect your calendar, configure
             your working hours, and help you create your first habit.
@@ -312,7 +312,7 @@
           {:else if calendarConnected}
             <h2 class="onboarding-title">Your calendars</h2>
             <p class="onboarding-description">
-              Choose which calendars Fluxure should read from when scheduling. Your primary calendar
+              Choose which calendars {APP_NAME} should read from when scheduling. Your primary calendar
               is always active.
             </p>
 
@@ -366,9 +366,11 @@
             </div>
 
             <div class="calendar-mode-hint">
-              <p><strong>Writable</strong> — Fluxure can create and move events on this calendar</p>
               <p>
-                <strong>Read-only</strong> — Fluxure reads events but won't modify this calendar
+                <strong>Writable</strong> — {APP_NAME} can create and move events on this calendar
+              </p>
+              <p>
+                <strong>Read-only</strong> — {APP_NAME} reads events but won't modify this calendar
               </p>
             </div>
 
@@ -386,7 +388,7 @@
             {:else}
               <h2 class="onboarding-title">Connect your calendar</h2>
               <p class="onboarding-description">
-                Grant calendar access so Fluxure can find the best times for your habits, tasks, and
+                Grant calendar access so {APP_NAME} can find the best times for your habits, tasks, and
                 focus time.
               </p>
             {/if}
@@ -552,7 +554,7 @@
             <CheckCircle size={48} class="complete-icon" />
             <h2 class="onboarding-title">You're all set</h2>
             <p class="onboarding-description">
-              Your account is ready. Fluxure will now optimize your schedule automatically.
+              Your account is ready. {APP_NAME} will now optimize your schedule automatically.
             </p>
           </div>
           <div class="onboarding-actions">

@@ -4,7 +4,7 @@
   import AuthLayout from '$lib/components/auth/AuthLayout.svelte';
   import GoogleLogo from '$lib/components/auth/GoogleLogo.svelte';
   import { googleAuth, getAuthState } from '$lib/auth.svelte';
-  import { pageTitle } from '$lib/brand';
+  import { APP_NAME, pageTitle } from '$lib/brand';
   import { BRAND } from '@fluxure/shared';
 
   let googleLoading = $state(false);
@@ -73,7 +73,7 @@
 
 <AuthLayout>
   <h2 class="auth-title">Welcome back</h2>
-  <p class="auth-subtitle">Sign in to your Fluxure account</p>
+  <p class="auth-subtitle">Sign in to your {APP_NAME} account</p>
 
   {#if error}
     <div class="auth-error">{error}</div>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { pageTitle } from '$lib/brand';
+  import { APP_NAME, pageTitle } from '$lib/brand';
   import { tasks, billing, ApiError } from '$lib/api';
   import type { Task } from '@fluxure/shared';
   import { Priority, TaskStatus } from '@fluxure/shared';
@@ -142,7 +142,7 @@
   <title>{pageTitle('Tasks')}</title>
 </svelte:head>
 
-<PageHeader title="Tasks" subtitle="Track work items and let Fluxure schedule them for you">
+<PageHeader title="Tasks" subtitle="Track work items and let {APP_NAME} schedule them for you">
   {#if !loading && taskList.length > 0}
     <button class="btn-primary" onclick={openCreate}>
       <Plus size={16} /> Add task

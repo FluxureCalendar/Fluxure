@@ -8,42 +8,35 @@
     name="description"
     content="Terms of Service for {APP_NAME}, the intelligent calendar scheduling tool."
   />
-  <meta property="og:title" content="Terms of Service — Fluxure" />
+  <meta property="og:title" content="Terms of Service — {APP_NAME}" />
   <meta
     property="og:description"
-    content="Terms of Service for Fluxure, the intelligent calendar scheduling tool."
+    content="Terms of Service for {APP_NAME}, the intelligent calendar scheduling tool."
   />
   <link rel="canonical" href="https://fluxure.app/terms" />
 </svelte:head>
 
 <div class="legal-page">
   <div class="legal-content">
-    <div class="legal-nav">
-      <a href="/">
-        <img src="/logo-mark.svg" alt="" width="24" height="24" />
-        <span class="legal-brand-name">fluxure</span>
-      </a>
-    </div>
-
     <h1>Terms of Service</h1>
     <p class="legal-meta">Last updated: March 7, 2026</p>
 
     <section>
       <h2>1. Acceptance of Terms</h2>
       <p>
-        By accessing or using Fluxure ("the Service"), you agree to be bound by these Terms of
-        Service. If you do not agree to these terms, you may not use the Service. These terms apply
-        to all users, whether accessing the hosted version or a self-hosted instance.
+        By accessing or using {APP_NAME} ("the Service"), you agree to be bound by these Terms of Service.
+        If you do not agree to these terms, you may not use the Service. These terms apply to all users,
+        whether accessing the hosted version or a self-hosted instance.
       </p>
     </section>
 
     <section>
       <h2>2. Description of Service</h2>
       <p>
-        Fluxure is an intelligent calendar scheduling tool that automatically places habits, tasks,
-        meetings, and focus time on your calendar. The Service integrates with Google Calendar via
-        the Google Calendar API to read your existing events and create optimized schedules using a
-        scoring-based scheduling engine.
+        {APP_NAME} is an intelligent calendar scheduling tool that automatically places habits, tasks,
+        meetings, and focus time on your calendar. The Service integrates with Google Calendar via the
+        Google Calendar API to read your existing events and create optimized schedules using a scoring-based
+        scheduling engine.
       </p>
       <p>The Service may include features such as:</p>
       <ul>
@@ -58,7 +51,7 @@
     <section>
       <h2>3. User Accounts</h2>
       <p>
-        To use Fluxure, you must create an account and authenticate via Google OAuth. You are
+        To use {APP_NAME}, you must create an account and authenticate via Google OAuth. You are
         responsible for:
       </p>
       <ul>
@@ -75,21 +68,21 @@
     <section>
       <h2>4. Google Calendar Integration</h2>
       <p>
-        Fluxure accesses your Google Calendar data through Google's OAuth 2.0 authorization flow. By
-        connecting your Google account, you grant Fluxure permission to:
+        {APP_NAME} accesses your Google Calendar data through Google's OAuth 2.0 authorization flow. By
+        connecting your Google account, you grant {APP_NAME} permission to:
       </p>
       <ul>
         <li>Read events from your connected calendars to identify scheduling constraints</li>
-        <li>Create, update, and delete events that Fluxure manages on your behalf</li>
+        <li>Create, update, and delete events that {APP_NAME} manages on your behalf</li>
         <li>Use incremental sync to stay current with calendar changes</li>
       </ul>
       <p>
-        You may revoke Fluxure's access to your Google Calendar at any time through your <a
-          href="https://myaccount.google.com/permissions"
-          target="_blank"
-          rel="noopener noreferrer">Google Account permissions</a
-        > or through the Fluxure settings page. Revoking access will prevent Fluxure from reading or modifying
-        your calendar data.
+        You may revoke {APP_NAME}'s access to your Google Calendar at any time through your
+        <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer"
+          >Google Account permissions</a
+        >
+        or through the {APP_NAME} settings page. Revoking access will prevent {APP_NAME} from reading
+        or modifying your calendar data.
       </p>
     </section>
 
@@ -120,12 +113,11 @@
       <h2>6. Intellectual Property</h2>
       <p>
         The Service, including its source code, design, algorithms, documentation, and branding, is
-        the intellectual property of Fluxure and is protected by applicable intellectual property
-        laws.
+        the intellectual property of {APP_NAME} and is protected by applicable intellectual property laws.
       </p>
       <p>
         You retain full ownership of your data, including your calendar events, habits, tasks, and
-        scheduling preferences. Fluxure claims no ownership rights over your content.
+        scheduling preferences. {APP_NAME} claims no ownership rights over your content.
       </p>
     </section>
 
@@ -138,8 +130,8 @@
         the data practices described in the Privacy Policy.
       </p>
       <p>
-        Fluxure is committed to compliance with the General Data Protection Regulation (GDPR) and
-        other applicable data protection laws.
+        {APP_NAME} is committed to compliance with the General Data Protection Regulation (GDPR) and other
+        applicable data protection laws.
       </p>
     </section>
 
@@ -164,15 +156,14 @@
     <section>
       <h2>9. Limitation of Liability</h2>
       <p>
-        To the maximum extent permitted by applicable law, Fluxure and its operators shall not be
-        liable for any indirect, incidental, special, consequential, or punitive damages, including
-        but not limited to loss of profits, data, or use, arising out of or in connection with your
-        use of the Service.
+        To the maximum extent permitted by applicable law, {APP_NAME} and its operators shall not be liable
+        for any indirect, incidental, special, consequential, or punitive damages, including but not limited
+        to loss of profits, data, or use, arising out of or in connection with your use of the Service.
       </p>
       <p>
-        Fluxure is not responsible for any missed appointments, scheduling conflicts, or calendar
-        errors that may result from the use of the scheduling engine. You are responsible for
-        reviewing and confirming all scheduled events on your calendar.
+        {APP_NAME} is not responsible for any missed appointments, scheduling conflicts, or calendar errors
+        that may result from the use of the scheduling engine. You are responsible for reviewing and confirming
+        all scheduled events on your calendar.
       </p>
     </section>
 
@@ -185,7 +176,8 @@
       <ul>
         <li>All your data will be permanently deleted from our systems</li>
         <li>
-          Fluxure-managed events on your Google Calendar will remain unless you manually remove them
+          {APP_NAME}-managed events on your Google Calendar will remain unless you manually remove
+          them
         </li>
         <li>You may export your data before deletion via the data export feature</li>
       </ul>
@@ -238,31 +230,14 @@
     min-height: 100vh;
     display: flex;
     justify-content: center;
-    padding: var(--space-8) var(--space-4);
+    // space-24 top clears the fixed 64px header (.header) + breathing room,
+    // since the brand block that used to provide this offset was removed.
+    padding: var(--space-24) var(--space-4) var(--space-8);
   }
 
   .legal-content {
     max-width: 680px;
     width: 100%;
-  }
-
-  .legal-nav {
-    margin-bottom: var(--space-8);
-
-    a {
-      display: inline-flex;
-      align-items: center;
-      gap: var(--space-3);
-      text-decoration: none;
-      color: var(--color-text);
-    }
-  }
-
-  .legal-brand-name {
-    font-family: $font-heading;
-    font-size: 1.125rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
   }
 
   h1 {

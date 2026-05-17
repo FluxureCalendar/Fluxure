@@ -1,7 +1,7 @@
 <script lang="ts">
   import ChevronDown from 'lucide-svelte/icons/chevron-down';
   import { reveal } from '$lib/reveal';
-  import { APP_URL, GITHUB_URL } from '$lib/config';
+  import { APP_NAME, APP_URL, GITHUB_URL } from '$lib/config';
 
   const features = [
     {
@@ -81,12 +81,12 @@
 
   const faqs = [
     {
-      q: 'What is Fluxure?',
+      q: `What is ${APP_NAME}?`,
       a: 'A calendar tool that automatically places habits, tasks, and focus time around your existing events. A calm, intelligent scheduling assistant.',
     },
     {
       q: 'How does scheduling work?',
-      a: 'Fluxure scores time slots based on your preferences, existing events, and priorities. It optimizes continuously as things change.',
+      a: `${APP_NAME} scores time slots based on your preferences, existing events, and priorities. It optimizes continuously as things change.`,
     },
     {
       q: 'Is my data private?',
@@ -385,7 +385,6 @@
     align-items: center;
     justify-content: center;
     margin-top: auto;
-    padding-top: var(--space-4);
     height: 40px;
     font-size: 0.875rem;
     font-weight: 500;
