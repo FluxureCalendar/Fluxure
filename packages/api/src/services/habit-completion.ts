@@ -1,8 +1,10 @@
 import { db } from '../db/pg-index.js';
 import { habitCompletions } from '../db/pg-schema.js';
+import { pgErrorCode, PG_UNIQUE_VIOLATION, PG_FK_VIOLATION } from '../db/pg-errors.js';
 import { logActivity } from '../routes/activity.js';
 import { broadcastToUser } from '../ws.js';
 import { triggerReschedule } from '../polling-ref.js';
+import { syncScheduledHabitEventCompleted } from './scheduled-event-completion.js';
 import { createLogger } from '../logger.js';
 import type { HabitCompletion } from '@fluxure/shared';
 
@@ -37,6 +39,14 @@ export async function completeHabit(
     logActivity(userId, 'create', 'habit', habitId, { completion: scheduledDate }).catch((err) =>
       log.error({ err }, 'Activity log error'),
     );
+
+    // Parity with manual completion: flip the scheduled event to Completed and
+    // push the ✅ prefix to Google before rescheduling. Best-effort — a failure
+    // here must not fail the job (BullMQ would retry into a duplicate-key loop).
+    await syncScheduledHabitEventCompleted(userId, habitId, scheduledDate).catch((err) =>
+      log.error({ err, userId, habitId, scheduledDate }, 'Scheduled-event completion sync failed'),
+    );
+
     broadcastToUser(userId, 'schedule_updated', 'Habit completed');
     triggerReschedule('Habit completed', userId);
 
@@ -47,18 +57,18 @@ export async function completeHabit(
       completedAt: now,
     };
   } catch (err: unknown) {
-    if (err && typeof err === 'object' && 'code' in err) {
-      const pgCode = (err as Record<string, unknown>).code;
-      // Duplicate completion — already done
-      if (pgCode === '23505') {
-        log.debug({ userId, habitId, scheduledDate }, 'Habit already completed');
-        return null;
-      }
-      // FK violation — habit was deleted between job registration and firing
-      if (pgCode === '23503') {
-        log.warn({ userId, habitId, scheduledDate }, 'Habit no longer exists, skipping completion');
-        return null;
-      }
+    // drizzle wraps driver errors in DrizzleQueryError — unwrap to the
+    // SQLSTATE code so expected duplicate/FK cases stay non-fatal.
+    const pgCode = pgErrorCode(err);
+    // Duplicate completion — already done
+    if (pgCode === PG_UNIQUE_VIOLATION) {
+      log.debug({ userId, habitId, scheduledDate }, 'Habit already completed');
+      return null;
+    }
+    // FK violation — habit was deleted between job registration and firing
+    if (pgCode === PG_FK_VIOLATION) {
+      log.warn({ userId, habitId, scheduledDate }, 'Habit no longer exists, skipping completion');
+      return null;
     }
     throw err;
   }

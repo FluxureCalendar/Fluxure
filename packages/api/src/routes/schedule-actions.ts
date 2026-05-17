@@ -356,6 +356,24 @@ async function handleLockEvent(
     manager?.markAllWritten();
     await invalidateQualityCache(userId);
     await logChange(userId, locked ? ScheduleChangeType.Locked : ScheduleChangeType.Unlocked, row);
+
+    // Scheduler handoff: unlocking a habit hands it back to the engine. Clear
+    // any completion record for this occurrence so the engine reschedules it
+    // instead of skipping the completed day and deleting the orphaned event.
+    if (!locked && row.itemType === ItemType.Habit && row.itemId) {
+      const habitId = row.itemId.split('__')[0];
+      const scheduledDate = row.itemId.split('__')[1] || row.start?.slice(0, 10) || '';
+      await db
+        .delete(habitCompletions)
+        .where(
+          and(
+            eq(habitCompletions.userId, userId),
+            eq(habitCompletions.habitId, habitId),
+            eq(habitCompletions.scheduledDate, scheduledDate),
+          ),
+        );
+    }
+
     broadcastToUser(userId, 'schedule_updated', 'Event lock toggled');
     triggerReschedule('Event lock toggled', userId);
     res.json({ eventId, locked, status: newStatus });

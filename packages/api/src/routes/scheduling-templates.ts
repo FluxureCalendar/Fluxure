@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { eq, and, asc } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
 import { schedulingTemplates } from '../db/pg-schema.js';
+import { pgErrorCode, PG_UNIQUE_VIOLATION } from '../db/pg-errors.js';
 import { getPlanLimits } from '@fluxure/shared';
 import { checkEntityLimit, sendPlanLimitError } from '../middleware/plan-gate.js';
 import { createSchedulingTemplateSchema } from '../validation.js';
@@ -58,7 +59,7 @@ router.post(
         })
         .returning();
     } catch (err: unknown) {
-      if (err instanceof Error && 'code' in err && (err as { code: unknown }).code === '23505') {
+      if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
         sendError(res, 409, 'A template with that name already exists');
         return;
       }

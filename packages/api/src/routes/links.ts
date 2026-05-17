@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { eq, and, gte, lte, inArray, sql, count } from 'drizzle-orm';
 
 import { db } from '../db/pg-index.js';
+import { pgErrorCode, PG_UNIQUE_VIOLATION } from '../db/pg-errors.js';
 import { notFrozen } from '../billing/active-filter.js';
 import {
   schedulingLinks,
@@ -111,12 +112,7 @@ router.post(
       const inserted = await db.insert(schedulingLinks).values(row).returning();
       res.status(201).json(toLink(inserted[0]));
     } catch (err: unknown) {
-      if (
-        err &&
-        typeof err === 'object' &&
-        'code' in err &&
-        (err as Record<string, unknown>).code === '23505'
-      ) {
+      if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
         sendError(res, 409, 'Slug already exists');
         return;
       }
@@ -163,12 +159,7 @@ router.put(
       }
       res.json(toLink(updated[0]));
     } catch (err: unknown) {
-      if (
-        err &&
-        typeof err === 'object' &&
-        'code' in err &&
-        (err as Record<string, unknown>).code === '23505'
-      ) {
+      if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
         sendError(res, 409, 'Slug already exists');
         return;
       }

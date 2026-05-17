@@ -286,6 +286,10 @@ export const MAX_VISIBLE_ATTENDEES = 3;
 export const DEFAULT_TIMEZONE = 'America/New_York';
 export const DEFAULT_BREAK_BETWEEN_MINUTES = 10;
 export const PAST_EVENT_RETENTION_DAYS = 3;
+// Reaped by the itemId-date sweep regardless of `end`/`status`. PAST_EVENT_RETENTION_DAYS
+// keys off `end`, which a locked move rewrites forward — so this is the only bound that
+// catches occurrences dragged far from their original scheduled date.
+export const STALE_SCHEDULED_ITEM_DAYS = 7;
 export const DEFAULT_TASK_DURATION = 60;
 export const DEFAULT_CHUNK_MIN = 15;
 export const DEFAULT_CHUNK_MAX = 120;

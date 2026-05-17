@@ -42,9 +42,11 @@ import {
   DEFAULT_TIMEZONE,
   DEFAULT_SCHEDULING_WINDOW_DAYS,
   PAST_EVENT_RETENTION_DAYS,
+  STALE_SCHEDULED_ITEM_DAYS,
   MS_PER_DAY,
   getPlanLimits,
 } from '@fluxure/shared';
+import { isStaleScheduledItemId } from './utils/stale-scheduled.js';
 import { recordScheduleChanges } from './routes/schedule.js';
 import { broadcastToUser, debouncedBroadcastToUser } from './ws.js';
 import { IDLE_TIMEOUT_MS, SCHEDULE_CHANGES_RETENTION_DAYS, isSelfHosted } from './config.js';
@@ -1489,7 +1491,11 @@ export class SchedulerRegistry {
     await this.cleanupOrphanedScheduledEvents(BATCH_SIZE, BATCH_PAUSE_MS);
   }
 
-  /** Delete scheduled events whose parent habit/task/meeting has been deleted. */
+  /**
+   * Delete scheduled events that are orphaned (parent entity deleted) OR stale
+   * by their original scheduled date (dragged far past it — `end`-based
+   * retention misses these because a locked move rewrites `end` forward).
+   */
   private async cleanupOrphanedScheduledEvents(
     batchSize: number,
     batchPauseMs: number,
@@ -1507,8 +1513,10 @@ export class SchedulerRegistry {
         ...allMeetingIds.map((r) => r.id),
       ]);
 
-      // Find scheduled events with an itemId whose base ID (before __)
-      // doesn't match any existing entity
+      const staleItemCutoffMs = Date.now() - STALE_SCHEDULED_ITEM_DAYS * MS_PER_DAY;
+
+      // Find scheduled events whose base ID (before __) doesn't match any
+      // existing entity, or whose original scheduled date is long stale.
       let totalDeleted = 0;
       let lastId = '';
       while (true) {
@@ -1524,17 +1532,18 @@ export class SchedulerRegistry {
 
         lastId = batch[batch.length - 1].id;
 
-        const orphanIds = batch
+        const idsToDelete = batch
           .filter((row) => {
             if (!row.itemId) return false;
             const baseId = row.itemId.split('__')[0];
-            return !validEntityIds.has(baseId);
+            if (!validEntityIds.has(baseId)) return true; // orphan
+            return isStaleScheduledItemId(row.itemId, staleItemCutoffMs); // stale by date
           })
           .map((r) => r.id);
 
-        if (orphanIds.length > 0) {
-          await db.delete(scheduledEvents).where(inArray(scheduledEvents.id, orphanIds));
-          totalDeleted += orphanIds.length;
+        if (idsToDelete.length > 0) {
+          await db.delete(scheduledEvents).where(inArray(scheduledEvents.id, idsToDelete));
+          totalDeleted += idsToDelete.length;
         }
 
         if (batch.length < batchSize) break;
@@ -1542,7 +1551,7 @@ export class SchedulerRegistry {
       }
 
       if (totalDeleted > 0) {
-        log.info({ totalDeleted }, 'Orphaned scheduled events cleanup: deleted stale rows');
+        log.info({ totalDeleted }, 'Stale/orphaned scheduled events cleanup: deleted rows');
       }
     } catch (err) {
       log.error({ err }, 'Orphaned scheduled events cleanup failed');
@@ -1604,22 +1613,24 @@ export async function cleanupScheduleData(): Promise<void> {
     ...allMeetingIds.map((r) => r.id),
   ]);
 
+  const staleItemCutoffMs = Date.now() - STALE_SCHEDULED_ITEM_DAYS * MS_PER_DAY;
   const allScheduled = await db
     .select({ id: scheduledEvents.id, itemId: scheduledEvents.itemId })
     .from(scheduledEvents);
-  const orphanIds = allScheduled
+  const idsToDelete = allScheduled
     .filter((row) => {
       if (!row.itemId) return false;
       const baseId = row.itemId.split('__')[0];
-      return !validEntityIds.has(baseId);
+      if (!validEntityIds.has(baseId)) return true; // orphan: source entity deleted
+      return isStaleScheduledItemId(row.itemId, staleItemCutoffMs); // dragged far past its date
     })
     .map((r) => r.id);
 
-  if (orphanIds.length > 0) {
-    await db.delete(scheduledEvents).where(inArray(scheduledEvents.id, orphanIds));
+  if (idsToDelete.length > 0) {
+    await db.delete(scheduledEvents).where(inArray(scheduledEvents.id, idsToDelete));
     log.info(
-      { totalDeleted: orphanIds.length },
-      'Orphaned scheduled events cleanup: deleted stale rows',
+      { totalDeleted: idsToDelete.length },
+      'Stale/orphaned scheduled events cleanup: deleted rows',
     );
   }
 }

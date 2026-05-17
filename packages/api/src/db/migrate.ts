@@ -330,6 +330,7 @@ function migrationV1(): Migration {
       CREATE INDEX IF NOT EXISTS idx_habit_completions_user_id ON habit_completions(user_id);
       CREATE INDEX IF NOT EXISTS idx_habit_completions_habit_user ON habit_completions(habit_id, user_id);
       CREATE INDEX IF NOT EXISTS idx_habit_completions_habit_date ON habit_completions(habit_id, scheduled_date);
+      CREATE INDEX IF NOT EXISTS idx_habit_completions_completed_at ON habit_completions(completed_at);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_habit_completions_unique ON habit_completions(user_id, habit_id, scheduled_date);
 
       -- ============================================================

@@ -418,6 +418,7 @@ export const habitCompletions = pgTable(
     index('idx_habit_completions_user_id').on(table.userId),
     index('idx_habit_completions_habit_user').on(table.habitId, table.userId),
     index('idx_habit_completions_habit_date').on(table.habitId, table.scheduledDate),
+    index('idx_habit_completions_completed_at').on(table.completedAt),
     uniqueIndex('idx_habit_completions_unique').on(
       table.userId,
       table.habitId,
