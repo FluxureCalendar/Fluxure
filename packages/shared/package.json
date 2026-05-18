@@ -43,6 +43,6 @@
   },
   "dependencies": {
     "@date-fns/tz": "^1.4.1",
-    "date-fns": "^4.1.0"
+    "date-fns": "^4.2.1"
   }
 }
