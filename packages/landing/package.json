@@ -28,15 +28,15 @@
   "devDependencies": {
     "@fontsource-variable/fraunces": "^5.2.9",
     "@fontsource-variable/inter": "^5.2.8",
-    "@fontsource/geist-mono": "^5.2.7",
+    "@fontsource/geist-mono": "^5.2.8",
     "@fontsource/geist-sans": "^5.2.5",
     "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.59.1",
+    "@sveltejs/kit": "^2.60.1",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "lucide-svelte": "^0.577.0",
     "sass-embedded": "^1.99.0",
-    "svelte": "^5.55.5",
-    "vite": "^8.0.12",
+    "svelte": "^5.55.8",
+    "vite": "^8.0.13",
     "vite-plugin-compression2": "^2.5.3"
   }
 }
