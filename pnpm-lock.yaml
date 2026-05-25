@@ -104,8 +104,8 @@ importers:
         specifier: ^10.6.2
         version: 10.6.2
       googleapis:
-        specifier: ^171.4.0
-        version: 171.4.0
+        specifier: ^172.0.0
+        version: 172.0.0
       helmet:
         specifier: ^8.2.0
         version: 8.2.0
@@ -2485,8 +2485,8 @@ packages:
     resolution: {integrity: sha512-eCzNACUXPb1PW5l0ULTzMHaL/ltPRADoPgjBlT8jWsTbxkCp6siv+qKJ/1ldaybCthGwsYFYallF7u9AkU4L+A==}
     engines: {node: '>=18.0.0'}
 
-  googleapis@171.4.0:
-    resolution: {integrity: sha512-xybFL2SmmUgIifgsbsRQYRdNrSAYwxWZDmkZTGjUIaRnX5jPqR8el/cEvo6rCqh7iaZx6MfEPS/lrDgZ0bymkg==}
+  googleapis@172.0.0:
+    resolution: {integrity: sha512-cF1m/nwfu9JP+JtR6j2nkQKnhu0z45eUVsWCVeooU8EIvBiPQqbfgAuJsTggCYEpbWJNwq2WS+aigaBC/sriIw==}
     engines: {node: '>=18'}
 
   gopd@1.2.0:
@@ -3251,6 +3251,10 @@ packages:
 
   qs@6.15.0:
     resolution: {integrity: sha512-mAZTtNCeetKMH+pSjrb76NAM8V9a05I9aBZOHztWy/UqcJdQYNsf59vrRKWnojAT9Y+GbIvoTBC++CPHqpDBhQ==}
+    engines: {node: '>=0.6'}
+
+  qs@6.15.2:
+    resolution: {integrity: sha512-Rzq0KEyX/w/tEybncDgdkZrJgVUsUMk3xjh3t5bv3S1HTAtg+uOYt72+ZfwiQwKdysThkTBdL/rTi6HDmX9Ddw==}
     engines: {node: '>=0.6'}
 
   quick-format-unescaped@4.0.4:
@@ -5934,12 +5938,12 @@ snapshots:
       extend: 3.0.2
       gaxios: 7.1.4
       google-auth-library: 10.6.2
-      qs: 6.15.0
+      qs: 6.15.2
       url-template: 2.0.8
     transitivePeerDependencies:
       - supports-color
 
-  googleapis@171.4.0:
+  googleapis@172.0.0:
     dependencies:
       google-auth-library: 10.6.2
       googleapis-common: 8.0.1
@@ -6654,6 +6658,10 @@ snapshots:
   punycode@2.3.1: {}
 
   qs@6.15.0:
+    dependencies:
+      side-channel: 1.1.0
+
+  qs@6.15.2:
     dependencies:
       side-channel: 1.1.0
 
