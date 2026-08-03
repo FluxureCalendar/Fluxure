@@ -26,17 +26,17 @@
     "@fluxure/shared": "workspace:*"
   },
   "devDependencies": {
-    "@fontsource-variable/fraunces": "^5.2.9",
-    "@fontsource-variable/inter": "^5.2.8",
-    "@fontsource/geist-mono": "^5.2.8",
-    "@fontsource/geist-sans": "^5.2.5",
+    "@fontsource-variable/fraunces": "^5.3.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource/geist-mono": "^5.3.0",
+    "@fontsource/geist-sans": "^5.3.0",
     "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.66.0",
-    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@sveltejs/kit": "^2.70.2",
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
     "lucide-svelte": "^0.577.0",
     "sass-embedded": "^1.100.0",
-    "svelte": "^5.56.3",
-    "vite": "^8.0.16",
+    "svelte": "^5.56.8",
+    "vite": "^8.2.0",
     "vite-plugin-compression2": "^2.5.3"
   }
 }
